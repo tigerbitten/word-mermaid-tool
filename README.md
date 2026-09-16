@@ -10,10 +10,15 @@ Prototype. Word desktop on Windows and Mac.
 
 ## What it does
 
-- Drag shapes from the palette onto the canvas; drag a blue dot on a block to
-  wire it to another block.
-- Double-click a block to rename it. Drag corners to resize. Marquee-select,
-  group into a labelled boundary, recolor.
+- Drag shapes from the palette onto the canvas. New blocks open for naming
+  straight away.
+- To rename a block: double-click it, press Enter or F2, or just select it and
+  start typing. Enter commits, Shift+Enter gives you a second line.
+- To connect: hover a block and drag one of the blue dots onto another block.
+  Drop on empty canvas instead and you get a new block, already wired up.
+- Drag corners to resize. Shift-click to multi-select, group into a labelled
+  boundary, recolor.
+- Drag empty canvas to pan; scroll to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
   in (from an LLM, say) and hit *Apply to canvas*.
 - **Insert new diagram** drops the picture into the document. **Load selected**

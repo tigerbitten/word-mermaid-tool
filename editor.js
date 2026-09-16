@@ -22,8 +22,9 @@ const EDITOR_STYLE = `
 const PAGE_STYLE = `
   .wm-host { position: relative; overflow: hidden; background: #fff; }
   .wm-label-input { position: absolute; z-index: 5; box-sizing: border-box; text-align: center;
-    font-family: Calibri, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px;
-    border: 2px solid #2563eb; border-radius: 3px; padding: 2px 4px; outline: none; }
+    font-family: Calibri, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.25;
+    border: 2px solid #2563eb; border-radius: 3px; padding: 3px 4px; outline: none;
+    resize: none; overflow: hidden; background: #fff; color: #111; }
 `;
 
 let model = newDiagram();
@@ -109,6 +110,10 @@ function initEditor(hostEl, onChange, onViewChange) {
 }
 
 function render() {
+  // Loading, undo and delete all swap the node objects out from under the
+  // hover, which would otherwise leave connection ports floating over a block
+  // that no longer exists.
+  if (hoverNode && !model.nodes.includes(hoverNode)) hoverNode = null;
   const t = `translate(${view.x} ${view.y}) scale(${view.zoom})`;
   world.setAttribute('transform', t);
   chrome.setAttribute('transform', t);
@@ -163,9 +168,15 @@ function drawChrome() {
       { x: mid.x, y: portNode.y + portNode.h }, { x: portNode.x, y: mid.y },
     ];
     for (const p of spots) {
+      // An invisible disc well larger than the dot does the catching -- a 6px
+      // target is far too fiddly to hit, especially zoomed out.
       el('circle', {
-        cx: p.x, cy: p.y, r: 5 * s, class: 'wm-port', 'stroke-width': 1.5 * s,
-        'data-role': 'port', 'data-for': portNode.id,
+        cx: p.x, cy: p.y, r: 15 * s, fill: 'transparent', stroke: 'none',
+        style: 'cursor:crosshair', 'data-role': 'port', 'data-for': portNode.id,
+      }, chrome);
+      el('circle', {
+        cx: p.x, cy: p.y, r: 6 * s, class: 'wm-port', 'stroke-width': 2 * s,
+        style: 'pointer-events:none',
       }, chrome);
     }
   }
@@ -186,10 +197,11 @@ function drawChrome() {
 
 // --- hit testing --------------------------------------------------------
 
-function nodeAt(p) {
+function nodeAt(p, margin) {
+  const m = margin || 0;
   for (let i = model.nodes.length - 1; i >= 0; i--) {
     const n = model.nodes[i];
-    if (p.x >= n.x && p.x <= n.x + n.w && p.y >= n.y && p.y <= n.y + n.h) return n;
+    if (p.x >= n.x - m && p.x <= n.x + n.w + m && p.y >= n.y - m && p.y <= n.y + n.h + m) return n;
   }
   return null;
 }
@@ -246,15 +258,25 @@ function takenIds() {
   return new Set(model.nodes.map((n) => n.id).concat(model.groups.map((g) => g.id)));
 }
 
-function addNode(shape, x, y) {
-  pushUndo();
+// Caller is responsible for pushUndo/commit -- connecting to empty canvas
+// creates a node and an edge as one undoable step.
+function makeNode(shape, x, y) {
   const label = shape === 'text' ? 'Text' : 'Block';
   const n = { id: makeId(label, takenIds()), label, shape, x: snap(x), y: snap(y), w: 140, h: 56, fill: '#ffffff' };
   fitNodeSize(n);
   model.nodes.push(n);
+  return n;
+}
+
+function addNode(shape, x, y) {
+  pushUndo();
+  const n = makeNode(shape, x, y);
   sel = new Set([n.id]);
   selEdge = -1;
   commit();
+  // Open for naming straight away -- a block called "Block" is never what you
+  // wanted, and this saves a separate double-click every single time.
+  beginLabelEdit(n);
 }
 
 function deleteSelection() {
@@ -416,12 +438,15 @@ function ensureUndo() {
 
 function onPointerMove(ev) {
   if (!drag) {
-    const n = nodeAt(toModel(ev));
-    if (n !== hoverNode) {
-      hoverNode = n;
-      svg.style.cursor = n ? 'move' : 'grab';
+    const p = toModel(ev);
+    // Ports show as you approach a block, not only once the pointer is inside
+    // it, so the connection dots are already there when you reach for them.
+    const near = nodeAt(p, 18 / view.zoom);
+    if (near !== hoverNode) {
+      hoverNode = near;
       render();
     }
+    svg.style.cursor = nodeAt(p) ? 'move' : 'grab';
     return;
   }
   const p = toModel(ev);
@@ -436,7 +461,7 @@ function onPointerMove(ev) {
   }
   if (drag.mode === 'connect') {
     drag.cur = p;
-    drag.over = nodeAt(p);
+    drag.over = nodeAt(p, 10 / view.zoom);
     render();
     return;
   }
@@ -472,12 +497,18 @@ function onPointerUp(ev) {
   drag = null;
 
   if (d.mode === 'connect') {
-    const target = nodeAt(toModel(ev));
-    if (target && target !== d.from) {
-      pushUndo();
-      model.edges.push({ from: d.from.id, to: target.id, label: '', style: 'arrow' });
-      commit();
-    } else render();
+    const p = toModel(ev);
+    let target = nodeAt(p, 10 / view.zoom);
+    if (target === d.from) { render(); return; }
+    pushUndo();
+    // Letting go over empty canvas creates the block you were reaching for and
+    // wires it up, rather than throwing the gesture away.
+    const created = !target;
+    if (created) target = makeNode(d.from.shape === 'text' ? 'rect' : d.from.shape, p.x - 70, p.y - 28);
+    model.edges.push({ from: d.from.id, to: target.id, label: '', style: 'arrow' });
+    if (created) { sel = new Set([target.id]); selEdge = -1; }
+    commit();
+    if (created) beginLabelEdit(target);
     return;
   }
   if (d.mode === 'pan') { svg.style.cursor = 'default'; render(); return; }
@@ -515,35 +546,51 @@ function onDoubleClick(ev) {
   if (target) beginLabelEdit(target);
 }
 
-function beginLabelEdit(item) {
-  const input = document.createElement('input');
+// A textarea rather than an input so labels can wrap onto two lines, which
+// block diagrams need constantly. Enter commits; Shift+Enter is a line break.
+// `seed` is the character that triggered the edit when you just start typing
+// over a selected block.
+function beginLabelEdit(item, seed) {
+  if (host.querySelector('.wm-label-input')) return;
+  const input = document.createElement('textarea');
   input.className = 'wm-label-input';
-  input.value = item.label;
+  input.value = seed != null ? seed : item.label;
   input.style.left = (view.x + item.x * view.zoom) + 'px';
-  input.style.top = (view.y + (item.y + (item.h || 24) / 2 - 14) * view.zoom) + 'px';
-  input.style.width = Math.max(80, item.w * view.zoom) + 'px';
+  input.style.top = (view.y + item.y * view.zoom) + 'px';
+  input.style.width = Math.max(90, item.w * view.zoom) + 'px';
+  input.style.height = Math.max(32, (item.h || 26) * view.zoom) + 'px';
+  input.style.fontSize = Math.max(11, 13 * view.zoom) + 'px';
   host.appendChild(input);
   input.focus();
-  input.select();
+  if (seed != null) input.setSelectionRange(input.value.length, input.value.length);
+  else input.select();
 
   let done = false;
   const finish = (save) => {
     if (done) return;
     done = true;
+    input.remove();
     if (save && input.value !== item.label) {
       pushUndo();
       item.label = input.value;
       if (item.shape) fitNodeSize(item);
       commit();
     }
-    input.remove();
   };
   input.addEventListener('blur', () => finish(true));
-  input.addEventListener('keydown', (ev2) => {
-    ev2.stopPropagation();
-    if (ev2.key === 'Enter') { ev2.preventDefault(); finish(true); }
-    else if (ev2.key === 'Escape') { ev2.preventDefault(); finish(false); }
+  input.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); finish(true); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
   });
+}
+
+function editSelectedLabel(seed) {
+  if (sel.size !== 1) return false;
+  const item = nodeById(model, [...sel][0]) || model.groups.find((g) => sel.has(g.id));
+  if (!item) return false;
+  beginLabelEdit(item, seed);
+  return true;
 }
 
 // Word claims keys that reach the host, so everything handled here is also
@@ -553,7 +600,13 @@ function onKeyDown(ev) {
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   const ctrl = ev.ctrlKey || ev.metaKey;
 
-  if (ev.key === 'Delete' || ev.key === 'Backspace') {
+  if (ev.key === 'Enter' || ev.key === 'F2') {
+    if (editSelectedLabel()) { ev.preventDefault(); ev.stopPropagation(); }
+  } else if (!ctrl && !ev.altKey && ev.key.length === 1 && ev.key !== ' ') {
+    // Typing over a selected block replaces its text, the way it works in
+    // every other diagram tool.
+    if (editSelectedLabel(ev.key)) { ev.preventDefault(); ev.stopPropagation(); }
+  } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
     ev.preventDefault(); ev.stopPropagation();
     deleteSelection();
   } else if (ctrl && ev.key.toLowerCase() === 'z') {
