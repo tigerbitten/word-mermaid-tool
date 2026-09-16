@@ -13,7 +13,6 @@ const EDITOR_STYLE = `
   .wm-canvas { width: 100%; height: 100%; display: block; background: #fff; touch-action: none; }
   .wm-selbox { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-seledge { fill: none; stroke: #2563eb; opacity: 0.35; }
-  .wm-marquee { fill: rgba(37,99,235,0.08); stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-port { fill: #fff; stroke: #2563eb; cursor: crosshair; }
   .wm-handle { fill: #fff; stroke: #2563eb; }
   .wm-rubber { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
@@ -34,8 +33,16 @@ let world = null;
 let chrome = null;
 let gridPattern = null;
 let notify = () => {};
+let onView = () => {};
 
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 3;
 let view = { x: 40, y: 40, zoom: 1 };
+// Until the user pans or zooms themselves, the view keeps re-framing the
+// diagram as the pane resizes. Dragging the task pane wider should show more
+// of the diagram, not more empty grid -- and it means the first fit isn't
+// stuck with whatever width the pane happened to have during layout.
+let viewTouched = false;
 let sel = new Set();      // node and group ids
 let selEdge = -1;
 let hoverNode = null;
@@ -55,9 +62,10 @@ function toModel(ev) {
   return { x: (ev.clientX - r.left - view.x) / view.zoom, y: (ev.clientY - r.top - view.y) / view.zoom };
 }
 
-function initEditor(hostEl, onChange) {
+function initEditor(hostEl, onChange, onViewChange) {
   host = hostEl;
   notify = onChange || (() => {});
+  onView = onViewChange || (() => {});
   host.classList.add('wm-host');
 
   const pageStyle = document.createElement('style');
@@ -96,7 +104,7 @@ function initEditor(hostEl, onChange) {
     addNode(payload.slice(9), p.x - 70, p.y - 28);
   });
 
-  new ResizeObserver(() => render()).observe(host);
+  new ResizeObserver(() => { if (viewTouched) render(); else fitView(); }).observe(host);
   render();
 }
 
@@ -115,11 +123,6 @@ function render() {
 // zoom to keep handles and hairlines a constant size on screen.
 function drawChrome() {
   const s = 1 / view.zoom;
-
-  if (drag && drag.mode === 'marquee') {
-    const r = normRect(drag.start, drag.cur);
-    el('rect', { ...r, class: 'wm-marquee', 'stroke-width': s }, chrome);
-  }
 
   for (const id of sel) {
     const box = nodeById(model, id) || model.groups.find((g) => g.id === id);
@@ -220,10 +223,6 @@ function edgeAt(p) {
   return -1;
 }
 
-function normRect(a, b) {
-  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) };
-}
-
 // --- model edits --------------------------------------------------------
 
 function pushUndo() {
@@ -306,11 +305,6 @@ function applyToEdge(fn) {
   commit();
 }
 
-function setDirection(dir) {
-  pushUndo();
-  model.direction = dir;
-  commit();
-}
 
 function undo() {
   if (!undoStack.length) return;
@@ -402,8 +396,12 @@ function onPointerDown(ev) {
     return;
   }
 
+  // Dragging empty canvas pans. Multi-select is shift-click rather than a
+  // rubber band -- one less mode, and dragging the background to move around
+  // is what people reach for first.
   if (!ev.shiftKey) { sel = new Set(); selEdge = -1; }
-  drag = { mode: 'marquee', start: p, cur: p };
+  drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
+  svg.style.cursor = 'grabbing';
   render();
   notify();
 }
@@ -421,7 +419,7 @@ function onPointerMove(ev) {
     const n = nodeAt(toModel(ev));
     if (n !== hoverNode) {
       hoverNode = n;
-      svg.style.cursor = n ? 'move' : 'default';
+      svg.style.cursor = n ? 'move' : 'grab';
       render();
     }
     return;
@@ -431,12 +429,14 @@ function onPointerMove(ev) {
   if (drag.mode === 'pan') {
     view.x = drag.vx + (ev.clientX - drag.sx);
     view.y = drag.vy + (ev.clientY - drag.sy);
+    viewTouched = true;
     render();
+    onView();
     return;
   }
-  if (drag.mode === 'marquee' || drag.mode === 'connect') {
+  if (drag.mode === 'connect') {
     drag.cur = p;
-    if (drag.mode === 'connect') drag.over = nodeAt(p);
+    drag.over = nodeAt(p);
     render();
     return;
   }
@@ -480,34 +480,34 @@ function onPointerUp(ev) {
     } else render();
     return;
   }
-  if (d.mode === 'marquee') {
-    const r = normRect(d.start, d.cur);
-    if (r.width > 3 || r.height > 3) {
-      for (const n of model.nodes) {
-        if (n.x < r.x + r.width && n.x + n.w > r.x && n.y < r.y + r.height && n.y + n.h > r.y) sel.add(n.id);
-      }
-    }
-    render();
-    notify();
-    return;
-  }
+  if (d.mode === 'pan') { svg.style.cursor = 'default'; render(); return; }
   if (d.undoPushed) commit(); else render();
+}
+
+// Zoom keeps the point under the cursor fixed, so the canvas grows and shrinks
+// around whatever you are looking at instead of drifting off.
+function zoomAround(next, anchor) {
+  const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+  view.x -= anchor.x * (z - view.zoom);
+  view.y -= anchor.y * (z - view.zoom);
+  view.zoom = z;
+  viewTouched = true;
+  render();
+  onView();
 }
 
 function onWheel(ev) {
   ev.preventDefault();
-  if (ev.ctrlKey || ev.metaKey) {
-    const p = toModel(ev);
-    const z = Math.max(0.2, Math.min(4, view.zoom * Math.exp(-ev.deltaY * 0.0015)));
-    view.x -= p.x * (z - view.zoom);
-    view.y -= p.y * (z - view.zoom);
-    view.zoom = z;
-  } else {
-    view.x -= ev.deltaX;
-    view.y -= ev.deltaY;
-  }
-  render();
+  zoomAround(view.zoom * Math.exp(-ev.deltaY * 0.0015), toModel(ev));
 }
+
+function canvasCenter() {
+  const r = svg.getBoundingClientRect();
+  return { x: (r.width / 2 - view.x) / view.zoom, y: (r.height / 2 - view.y) / view.zoom };
+}
+
+function zoomBy(factor) { zoomAround(view.zoom * factor, canvasCenter()); }
+function getZoom() { return view.zoom; }
 
 function onDoubleClick(ev) {
   const p = toModel(ev);
@@ -591,13 +591,18 @@ function selectionInfo() {
   };
 }
 
+// Never zooms past 1:1. Blowing a two-block diagram up to fill the pane looks
+// broken, and shrinking below half makes labels unreadable -- past that point
+// it's better to clip and let the user pan.
 function fitView() {
   const r = host.getBoundingClientRect();
-  if (!model.nodes.length) { view = { x: 40, y: 40, zoom: 1 }; render(); return; }
+  viewTouched = false;
+  if (!model.nodes.length) { view = { x: 40, y: 40, zoom: 1 }; render(); onView(); return; }
   const b = diagramBounds(model);
-  const pad = 30;
-  view.zoom = Math.max(0.2, Math.min((r.width - pad * 2) / b.w, (r.height - pad * 2) / b.h, 1.5));
+  const pad = 24;
+  view.zoom = Math.max(0.5, Math.min((r.width - pad * 2) / b.w, (r.height - pad * 2) / b.h, 1));
   view.x = (r.width - b.w * view.zoom) / 2 - b.x * view.zoom;
   view.y = (r.height - b.h * view.zoom) / 2 - b.y * view.zoom;
   render();
+  onView();
 }
