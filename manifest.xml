@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+    xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:type="TaskPaneApp">
+  <Id>13ccc42c-e6dc-4d30-aa55-d1dd2850fc01</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>prototype</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Mermaid Block Diagrams" />
+  <Description DefaultValue="Draw block diagrams in Word; the Mermaid source is stored in the image's alt-text so an LLM can read it later." />
+  <IconUrl DefaultValue="https://github.githubassets.com/favicons/favicon.png" />
+  <HighResolutionIconUrl DefaultValue="https://github.githubassets.com/favicons/favicon.png" />
+  <SupportUrl DefaultValue="https://github.com/tigerbitten/word-mermaid-tool" />
+  <Hosts>
+    <Host Name="Document" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://tigerbitten.github.io/word-mermaid-tool/taskpane.html?v=1" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>

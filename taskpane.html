@@ -1,0 +1,484 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mermaid Block Diagrams</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  /* Fixed light appearance regardless of Word's theme -- the dark-mode signal
+     is unreliable from inside the taskpane iframe. */
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Calibri, system-ui, sans-serif; font-size: 13px;
+    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    background: #fff; color: #000; }
+
+  .topbar { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid #e0e0e0; flex: none; }
+  .build { color: #888; font-size: 0.75rem; margin-left: auto; }
+  .tab { padding: 0.25rem 0.7rem; border: 1px solid #ccc; border-radius: 4px;
+    background: #f3f3f3; cursor: pointer; }
+  .tab.active { background: #2563eb; color: #fff; border-color: #1d4ed8; }
+
+  .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+    padding: 0.3rem 0.5rem; border-bottom: 1px solid #eee; flex: none; }
+
+  .pane { flex: 1; min-height: 0; display: flex; }
+  .pane.hidden { display: none; }
+
+  #palette { width: 56px; flex: none; border-right: 1px solid #e0e0e0;
+    overflow-y: auto; padding: 0.25rem 0; }
+  .pal-item { display: flex; flex-direction: column; align-items: center;
+    padding: 0.3rem 0; border-radius: 4px; cursor: grab; }
+  .pal-item:hover { background: #eef3fd; }
+  .pal-item.armed { background: #dbeafe; box-shadow: inset 0 0 0 1px #2563eb; }
+  .pal-item span { font-size: 0.6rem; color: #666; margin-top: 1px; }
+  #canvasHost { flex: 1; min-width: 0; }
+
+  #mdPane { flex-direction: column; padding: 0.5rem; gap: 0.4rem; }
+  #src { flex: 1; min-height: 0; width: 100%; font-family: Consolas, monospace;
+    font-size: 12px; line-height: 1.45; resize: none;
+    padding: 0.4rem 0.4rem 0.4rem 0.6rem; }
+
+  #inspector { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+    padding: 0.35rem 0.5rem; border-top: 1px solid #eee; flex: none; min-height: 2.1rem; }
+  .hint { color: #777; font-size: 0.75rem; }
+  .swatch { width: 18px; height: 18px; border: 1px solid #aaa; border-radius: 3px;
+    cursor: pointer; padding: 0; }
+
+  /* Reserves its height when empty so nothing jumps when a message appears. */
+  #status { white-space: pre-wrap; min-height: 1.2em; margin: 0 0.5rem; padding: 0.3rem 0.5rem;
+    border: 1px solid transparent; border-radius: 4px; flex: none; font-size: 0.8rem; }
+  #status.status-error { color: #b00020; background: #fdecec; border-color: #f3b8b8; }
+  #status.status-success { color: #0a7a2f; background: #eaf7ee; border-color: #b8e0c4; }
+  #status.status-warning { color: #8a6100; background: #fff6e0; border-color: #f0dca0; }
+
+  button, select { border-radius: 4px; padding: 0.25rem 0.6rem; cursor: pointer;
+    background: #f3f3f3; color: #111; border: 1px solid #bbb; font-size: 12px; }
+  button.primary { background: #2563eb; color: #fff; border-color: #1d4ed8; }
+  button.primary:hover:not(:disabled) { background: #1d4ed8; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input[type=text] { border: 1px solid #bbb; border-radius: 4px; padding: 0.25rem 0.4rem; font-size: 12px; }
+
+  #actions { border-top: 1px solid #e0e0e0; padding: 0.4rem 0.5rem; flex: none;
+    display: flex; flex-wrap: wrap; gap: 0.4rem; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <button class="tab active" id="tabCanvas">Canvas</button>
+    <button class="tab" id="tabMd">Mermaid</button>
+    <span class="build">build v1</span>
+  </div>
+
+  <div class="toolbar">
+    <button id="fitBtn">Fit</button>
+    <button id="groupBtn">Group</button>
+    <button id="ungroupBtn">Ungroup</button>
+    <button id="deleteBtn">Delete</button>
+    <label class="hint">Flow
+      <select id="dirSel">
+        <option value="LR">left to right</option>
+        <option value="TD">top down</option>
+        <option value="RL">right to left</option>
+        <option value="BT">bottom up</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="pane" id="canvasPane">
+    <div id="palette"></div>
+    <div id="canvasHost"></div>
+  </div>
+
+  <div class="pane hidden" id="mdPane">
+    <textarea id="src" spellcheck="false"></textarea>
+    <div><button id="applyBtn" class="primary">Apply to canvas</button></div>
+  </div>
+
+  <div id="inspector"></div>
+  <div id="status"></div>
+
+  <div id="actions">
+    <button id="insertBtn" class="primary">Insert new diagram</button>
+    <button id="replaceBtn" class="primary">Replace selected</button>
+    <button id="loadBtn">Load selected</button>
+    <button id="newBtn">New (blank)</button>
+    <button id="copyBtn">Copy for LLM</button>
+  </div>
+
+<script src="diagram.js?v=1"></script>
+<script src="render.js?v=1"></script>
+<script src="editor.js?v=1"></script>
+<script>
+  const RASTER_SCALE = 3;   // ~288dpi, so the inserted PNG stays sharp in print
+  const PX_TO_PT = 0.75;
+
+  const STARTER = `flowchart LR
+  CPU["CPU core"]
+  BUS{{"System bus"}}
+  MEM[("DRAM")]
+  CPU ==>|"addr"| BUS
+  BUS --> MEM
+%% CPU 40,40 140x56
+%% BUS 260,40 140x56
+%% MEM 480,40 140x56`;
+
+  const PALETTE = [
+    ['rect', 'Block'], ['round', 'Round'], ['stadium', 'Port'],
+    ['subroutine', 'Module'], ['cylinder', 'Memory'], ['circle', 'Node'],
+    ['diamond', 'Mux'], ['hexagon', 'Bus'], ['parallelogram', 'I/O'], ['text', 'Label'],
+  ];
+  const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#ede9fe', '#eceff1'];
+  const EDGE_KINDS = [['arrow', 'arrow'], ['line', 'plain line'], ['thick', 'thick / bus'],
+                      ['dotted', 'dotted / control'], ['bidir', 'both ways']];
+
+  const src = document.getElementById('src');
+  const statusEl = document.getElementById('status');
+  const inspector = document.getElementById('inspector');
+  let wordReady = false;
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text || '';
+    statusEl.className = kind ? 'status-' + kind : '';
+  }
+
+  function describeError(e) {
+    // OfficeExtension errors often have an empty .message but a real .code / debugInfo.
+    return (e && (e.code || e.message)) + ' | ' + JSON.stringify(e && e.debugInfo);
+  }
+
+  async function withButtonsDisabled(fn) {
+    const buttons = document.querySelectorAll('#actions button');
+    buttons.forEach((b) => { b.disabled = true; });
+    try { await fn(); } finally { restoreActionButtons(); }
+  }
+
+  function restoreActionButtons() {
+    document.querySelectorAll('#actions button').forEach((b) => { b.disabled = false; });
+    if (!wordReady) {
+      for (const id of ['insertBtn', 'replaceBtn', 'loadBtn']) document.getElementById(id).disabled = true;
+    }
+  }
+
+  // Palette icons are drawn with the same shape code as the canvas, so the
+  // swatch you drag always matches what you get.
+  function buildPalette() {
+    const host = document.getElementById('palette');
+    for (const [shape, name] of PALETTE) {
+      const item = document.createElement('div');
+      item.className = 'pal-item';
+      item.draggable = true;
+      item.title = name;
+
+      const icon = document.createElementNS(SVG_NS, 'svg');
+      icon.setAttribute('width', 40);
+      icon.setAttribute('height', 26);
+      icon.setAttribute('viewBox', '0 0 40 26');
+      const parts = shapeElement({ x: 3, y: 3, w: 34, h: 20, shape });
+      parts.forEach((p, i) => {
+        p.setAttribute('fill', i === 0 ? '#fff' : 'none');
+        p.setAttribute('stroke', '#333');
+        p.setAttribute('stroke-width', '1.4');
+        icon.appendChild(p);
+      });
+      if (!parts.length) {
+        const t = document.createElementNS(SVG_NS, 'text');
+        t.setAttribute('x', 20); t.setAttribute('y', 18);
+        t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '14');
+        t.setAttribute('fill', '#333');
+        t.textContent = 'T';
+        icon.appendChild(t);
+      }
+      item.appendChild(icon);
+      const label = document.createElement('span');
+      label.textContent = name;
+      item.appendChild(label);
+
+      item.addEventListener('dragstart', (ev) => {
+        ev.dataTransfer.setData('text/plain', 'wm-shape:' + shape);
+        ev.dataTransfer.effectAllowed = 'copy';
+      });
+      item.addEventListener('click', () => {
+        const already = item.classList.contains('armed');
+        document.querySelectorAll('.pal-item').forEach((n) => n.classList.remove('armed'));
+        if (already) { armShape(null); setStatus(''); return; }
+        item.classList.add('armed');
+        armShape(shape);
+        setStatus('click the canvas to place a ' + name.toLowerCase(), 'warning');
+      });
+      host.appendChild(item);
+    }
+  }
+
+  function refreshInspector() {
+    inspector.innerHTML = '';
+    const info = selectionInfo();
+
+    const add = (node) => inspector.appendChild(node);
+    const hint = (text) => {
+      const s = document.createElement('span');
+      s.className = 'hint';
+      s.textContent = text;
+      return s;
+    };
+
+    if (info.edge) {
+      add(hint('Connector'));
+      const kind = document.createElement('select');
+      for (const [value, name] of EDGE_KINDS) {
+        const o = document.createElement('option');
+        o.value = value; o.textContent = name;
+        if (info.edge.style === value) o.selected = true;
+        kind.appendChild(o);
+      }
+      kind.addEventListener('change', () => applyToEdge((e) => { e.style = kind.value; }));
+      add(kind);
+
+      const label = document.createElement('input');
+      label.type = 'text';
+      label.placeholder = 'label';
+      label.value = info.edge.label;
+      label.size = 12;
+      label.addEventListener('change', () => applyToEdge((e) => { e.label = label.value; }));
+      label.addEventListener('keydown', (ev) => ev.stopPropagation());
+      add(label);
+      return;
+    }
+
+    if (info.nodes.length) {
+      add(hint(info.nodes.length + ' block' + (info.nodes.length > 1 ? 's' : '')));
+      const shapeSel = document.createElement('select');
+      for (const [value, name] of PALETTE) {
+        const o = document.createElement('option');
+        o.value = value; o.textContent = name;
+        if (info.nodes.length === 1 && info.nodes[0].shape === value) o.selected = true;
+        shapeSel.appendChild(o);
+      }
+      shapeSel.addEventListener('change', () => {
+        applyToNodes((n) => { n.shape = shapeSel.value; fitNodeSize(n); });
+      });
+      add(shapeSel);
+      for (const color of FILLS) {
+        const b = document.createElement('button');
+        b.className = 'swatch';
+        b.style.background = color;
+        b.title = color;
+        b.addEventListener('click', () => applyToNodes((n) => { n.fill = color; }));
+        add(b);
+      }
+      return;
+    }
+
+    if (info.groups.length) { add(hint('Group selected -- double-click its title to rename')); return; }
+    add(hint('Drag a shape in, or click a block. Drag a blue dot to connect.'));
+  }
+
+  function onModelChanged() {
+    src.value = toMermaid(getModel());
+    document.getElementById('dirSel').value = getModel().direction;
+    document.querySelectorAll('.pal-item.armed').forEach((n) => n.classList.remove('armed'));
+    refreshInspector();
+  }
+
+  // groupSelection/ungroupSelection return null on success, a reason on refusal.
+  function reportRefusal(reason, successText) {
+    setStatus(reason || successText, reason ? 'error' : 'success');
+  }
+
+  // --- Word ------------------------------------------------------------
+
+  async function rasterize() {
+    const { svg, width, height } = buildExportSvg(getModel());
+    const text = new XMLSerializer().serializeToString(svg);
+    // btoa throws on non-Latin1, and labels are arbitrary UTF-8.
+    const dataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(text)));
+
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('the SVG failed to decode'));
+      img.src = dataUrl;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(width * RASTER_SCALE);
+    canvas.height = Math.ceil(height * RASTER_SCALE);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return { base64: canvas.toDataURL('image/png').split(',')[1], width, height };
+  }
+
+  async function insertOrReplace(mode) {
+    await withButtonsDisabled(async () => {
+      const d = getModel();
+      if (!d.nodes.length) { setStatus('nothing to insert -- add a block first', 'error'); return; }
+
+      let png;
+      try { png = await rasterize(); }
+      catch (e) { setStatus('rasterize failed: ' + describeError(e), 'error'); return; }
+
+      try {
+        let noSelection = false;
+        await Word.run(async (context) => {
+          const range = context.document.getSelection();
+          let location = Word.InsertLocation.after;
+          if (mode === 'replace') {
+            const pics = range.inlinePictures;
+            pics.load('items');
+            await context.sync();
+            if (pics.items.length === 0) { noSelection = true; return; }
+            location = Word.InsertLocation.replace;
+          }
+          // Insert always goes *after* the selection. InsertLocation.replace on
+          // a range that is an inline picture throws Word's runIndex bug and
+          // silently eats the selected image.
+          const pic = range.insertInlinePictureFromBase64(png.base64, location);
+          pic.altTextDescription = toAltText(d);
+          // The PNG is rendered at 3x for sharpness; size it back down so it
+          // lands in the document at its intended physical size.
+          pic.width = png.width * PX_TO_PT;
+          pic.height = png.height * PX_TO_PT;
+          await context.sync();
+        });
+        setStatus(
+          noSelection ? 'nothing selected to replace -- click a diagram first'
+                      : (mode === 'replace' ? 'replaced' : 'inserted'),
+          noSelection ? 'error' : 'success');
+      } catch (e) {
+        setStatus('insert failed: ' + describeError(e), 'error');
+      }
+    });
+  }
+
+  async function loadSelected() {
+    await withButtonsDisabled(async () => {
+      try {
+        await Word.run(async (context) => {
+          const pics = context.document.getSelection().inlinePictures;
+          pics.load('items');
+          await context.sync();
+          if (pics.items.length === 0) { setStatus('select a diagram image first', 'error'); return; }
+
+          const pic = pics.items[0];
+          pic.load('altTextDescription');
+          await context.sync();
+
+          const raw = pic.altTextDescription || '';
+          if (!looksLikeOurAltText(raw)) {
+            setStatus('that image has no Mermaid source in its alt-text (not from this tool)', 'error');
+            return;
+          }
+          let d;
+          try { d = parseMermaid(raw); }
+          catch (e) { setStatus('diagram source is corrupted, refusing to load: ' + e.message, 'error'); return; }
+          if (!d.nodes.length) { setStatus('alt-text parsed but held no blocks', 'error'); return; }
+
+          setModel(d);
+          onModelChanged();
+          fitView();
+          setStatus('loaded from selection', 'success');
+        });
+      } catch (e) {
+        setStatus('load failed: ' + describeError(e), 'error');
+      }
+    });
+  }
+
+  // --- wiring ----------------------------------------------------------
+
+  function showTab(which) {
+    const canvas = which === 'canvas';
+    document.getElementById('canvasPane').classList.toggle('hidden', !canvas);
+    document.getElementById('mdPane').classList.toggle('hidden', canvas);
+    document.getElementById('tabCanvas').classList.toggle('active', canvas);
+    document.getElementById('tabMd').classList.toggle('active', !canvas);
+  }
+
+  buildPalette();
+  initEditor(document.getElementById('canvasHost'), onModelChanged);
+
+  document.getElementById('tabCanvas').addEventListener('click', () => showTab('canvas'));
+  document.getElementById('tabMd').addEventListener('click', () => showTab('md'));
+
+  document.getElementById('fitBtn').addEventListener('click', fitView);
+  document.getElementById('deleteBtn').addEventListener('click', deleteSelection);
+  document.getElementById('groupBtn').addEventListener('click', () => reportRefusal(groupSelection(), 'grouped'));
+  document.getElementById('ungroupBtn').addEventListener('click', () => reportRefusal(ungroupSelection(), 'ungrouped'));
+  document.getElementById('dirSel').addEventListener('change', (ev) => setDirection(ev.target.value));
+
+  document.getElementById('applyBtn').addEventListener('click', () => {
+    let d;
+    try { d = parseMermaid(src.value); }
+    catch (e) { setStatus('could not parse that Mermaid: ' + e.message, 'error'); return; }
+    if (!d.nodes.length) { setStatus('no blocks found in that Mermaid -- canvas left alone', 'error'); return; }
+    setModel(d);
+    onModelChanged();
+    fitView();
+    showTab('canvas');
+    setStatus('canvas rebuilt from Mermaid', 'success');
+  });
+
+  document.getElementById('newBtn').addEventListener('click', () => {
+    setModel(newDiagram());
+    onModelChanged();
+    fitView();
+    setStatus('cleared', 'success');
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    // navigator.clipboard is blocked by Word's iframe permissions policy, so
+    // select the text and let the user press Ctrl+C.
+    showTab('md');
+    src.value = toAltText(getModel());
+    src.focus();
+    src.select();
+    setStatus('fenced Mermaid selected above -- press Ctrl+C to copy', 'success');
+  });
+
+  document.getElementById('insertBtn').addEventListener('click', () => insertOrReplace('insert'));
+  document.getElementById('replaceBtn').addEventListener('click', () => insertOrReplace('replace'));
+  document.getElementById('loadBtn').addEventListener('click', loadSelected);
+
+  src.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();
+    if (ev.key === 'Tab') {
+      ev.preventDefault();
+      const start = src.selectionStart;
+      src.value = src.value.slice(0, start) + '  ' + src.value.slice(src.selectionEnd);
+      src.selectionStart = src.selectionEnd = start + 2;
+    }
+  });
+
+  setModel(parseMermaid(STARTER));
+  onModelChanged();
+  requestAnimationFrame(fitView);
+
+  // This page also runs in a plain browser for development. If Office never
+  // shows up, stay usable and say so rather than hanging -- Office.onReady can
+  // hang forever when its CDN dependencies are blocked.
+  (async function connectWord() {
+    if (typeof Office === 'undefined') {
+      restoreActionButtons();
+      setStatus('browser mode -- Word actions disabled', 'warning');
+      return;
+    }
+    try {
+      const info = await Promise.race([
+        Office.onReady(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Office.onReady() timed out')), 2500)),
+      ]);
+      // onReady resolves in a plain browser too, just with a null host -- that
+      // is the only signal that distinguishes real Word from the dev loop.
+      if (!info || !info.host) throw new Error('no Office host');
+      wordReady = true;
+      setStatus('');
+    } catch (e) {
+      restoreActionButtons();
+      setStatus('not connected to Word (' + e.message + ') -- browser mode', 'warning');
+    }
+  })();
+</script>
+</body>
+</html>

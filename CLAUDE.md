@@ -63,6 +63,12 @@ a fresh GitHub Pages deploy, and changes silently don't show up. This one
 line has repeatedly cost more debugging time than everything else in this
 project — always bump it, no exceptions.
 
+`diagram.js`, `render.js` and `editor.js` are separate requests and cache
+independently of the taskpane, so they carry the same `?v=N` on their
+`<script src>` tags. Bump all of them to the same N in one go — a fresh
+`taskpane.html` paired with a stale `editor.js` is the worst version of
+this bug, because the build marker updates and everything still looks fine.
+
 The taskpane also shows a `build vN` marker at the top of the page (bump it
 alongside `?v=N`) so a stale load is visually obvious instead of silently
 misleading.
