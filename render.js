@@ -199,7 +199,20 @@ function routePoints(a, b) {
     pts = [p0, { x: p0.x, y: my }, { x: p1.x, y: my }, p1];
   }
 
-  return pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) > 0.5);
+  const spaced = pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) > 0.5);
+
+  // Drop interior points that sit on the line between their neighbours. A
+  // straight horizontal hop would otherwise keep a redundant midpoint, which
+  // splits the run in two and pushes the edge label up against one box.
+  const out = [spaced[0]];
+  for (let i = 1; i < spaced.length - 1; i++) {
+    const a = out[out.length - 1];
+    const b = spaced[i];
+    const c = spaced[i + 1];
+    if (Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) > 0.01) out.push(b);
+  }
+  out.push(spaced[spaced.length - 1]);
+  return out;
 }
 
 function roundedPathD(pts, r) {
