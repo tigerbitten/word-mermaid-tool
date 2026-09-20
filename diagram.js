@@ -1,8 +1,8 @@
 // The diagram model, and Mermaid text in/out.
 //
 // A diagram is a plain object:
-//   { direction, nodes: [{id,label,shape,x,y,w,h,fill}],
-//     edges: [{from,to,label,style}],
+//   { direction, nodes: [{id,label,shape,x,y,w,h,fill,fontSize}],
+//     edges: [{from,to,label,style,width,fromAnchor,toAnchor}],
 //     groups: [{id,label,members:[nodeId],x,y,w,h}] }
 //
 // Nodes carry their own geometry because the canvas is the source of truth --
@@ -11,31 +11,36 @@
 // anywhere and reads natively to an LLM.
 
 const SHAPES = {
-  rect:          { open: '[',  close: ']'  },
-  round:         { open: '(',  close: ')'  },
-  stadium:       { open: '([', close: '])' },
-  subroutine:    { open: '[[', close: ']]' },
-  cylinder:      { open: '[(', close: ')]' },
-  circle:        { open: '((', close: '))' },
-  diamond:       { open: '{',  close: '}'  },
-  hexagon:       { open: '{{', close: '}}' },
-  parallelogram: { open: '[/', close: '/]' },
-  text:          { open: '[',  close: ']'  }, // borderless; marked by its style line
+  rect:              { open: '[',   close: ']'   },
+  round:             { open: '(',   close: ')'   },
+  stadium:           { open: '([',  close: '])'  },
+  subroutine:        { open: '[[',  close: ']]'  },
+  cylinder:          { open: '[(',  close: ')]'  },
+  circle:            { open: '((',  close: '))'  },
+  doublecircle:      { open: '(((', close: ')))' },
+  diamond:           { open: '{',   close: '}'   },
+  hexagon:           { open: '{{',  close: '}}'  },
+  parallelogram:     { open: '[/',  close: '/]'  },
+  parallelogram_alt: { open: '[\\', close: '\\]' },
+  trapezoid:         { open: '[/',  close: '\\]' },
+  trapezoid_alt:     { open: '[\\', close: '/]'  },
+  flag:              { open: '>',   close: ']'   },
+  text:              { open: '[',   close: ']'   }, // borderless; marked by its style line
 };
 
-const EDGE_STYLES = {
-  arrow:  '-->',
-  line:   '---',
-  thick:  '==>',
-  dotted: '-.->',
-  bidir:  '<-->',
-};
+// Arrowhead and line character, independent of thickness. Thickness is its own
+// property because "dotted" and "heavy" are orthogonal questions -- a control
+// signal can be either. The `==` forms below carry thickness through to other
+// Mermaid renderers, and `linkStyle` carries the exact value.
+const EDGE_STYLES = { arrow: '-->', line: '---', thick: '==>', dotted: '-.->', bidir: '<-->' };
 
 const LAYOUT_HEADER = '%% --- layout (word-mermaid-tool v1; safe to ignore) ---';
 const FENCE_OPEN = '```mermaid';
 
 const DEFAULT_W = 140;
 const DEFAULT_H = 56;
+const DEFAULT_FONT_SIZE = 13;
+const DEFAULT_EDGE_W = 1.5;
 
 function newDiagram() {
   return { direction: 'LR', nodes: [], edges: [], groups: [] };
@@ -82,24 +87,42 @@ function nodeDecl(n) {
   return n.id + s.open + quoteLabel(n.label) + s.close;
 }
 
-function edgeDecl(e) {
-  const link = EDGE_STYLES[e.style] || EDGE_STYLES.arrow;
-  const label = e.label ? '|' + quoteLabel(e.label) + '|' : '';
-  return e.from + ' ' + link + label + ' ' + e.to;
+// A heavy edge is written with Mermaid's `==` form so thickness survives in
+// other renderers too; `linkStyle` below pins down the exact width.
+function linkToken(e) {
+  const heavy = (e.width || DEFAULT_EDGE_W) >= 3;
+  if (e.style === 'dotted') return '-.->';
+  if (e.style === 'bidir') return heavy ? '<==>' : '<-->';
+  if (e.style === 'line') return heavy ? '===' : '---';
+  return heavy ? '==>' : '-->';
 }
 
-// Only emitted when it carries information: a borderless text label, or a
-// non-default fill. Both are standard Mermaid `style` statements, so colors
-// survive a round-trip through any other Mermaid tool.
+function edgeDecl(e) {
+  const label = e.label ? '|' + quoteLabel(e.label) + '|' : '';
+  return e.from + ' ' + linkToken(e) + label + ' ' + e.to;
+}
+
+// Only emitted when it carries information: a borderless text label, a
+// non-default fill, or a non-default text size. All standard Mermaid `style`
+// statements, so they survive a round-trip through any other Mermaid tool.
 function styleDecl(n) {
-  if (n.shape === 'text') return 'style ' + n.id + ' fill:none,stroke:none';
-  if (n.fill && n.fill !== '#ffffff') return 'style ' + n.id + ' fill:' + n.fill + ',stroke:#333';
-  return null;
+  const parts = [];
+  if (n.shape === 'text') parts.push('fill:none', 'stroke:none');
+  else if (n.fill && n.fill !== '#ffffff') parts.push('fill:' + n.fill, 'stroke:#333');
+  if (n.fontSize && n.fontSize !== DEFAULT_FONT_SIZE) parts.push('font-size:' + n.fontSize + 'px');
+  return parts.length ? 'style ' + n.id + ' ' + parts.join(',') : null;
 }
 
 function layoutLine(item) {
   return '%% ' + item.id + ' ' + Math.round(item.x) + ',' + Math.round(item.y) +
     ' ' + Math.round(item.w) + 'x' + Math.round(item.h);
+}
+
+// Where an edge meets a block: which side, and how far along it. Only written
+// when the user picked a port by hand -- otherwise the side is re-derived on
+// every render, which is what lets connectors follow blocks as you drag them.
+function anchorText(a) {
+  return a ? a.side + a.t.toFixed(2) : '-';
 }
 
 function toMermaid(d) {
@@ -127,11 +150,20 @@ function toMermaid(d) {
     const s = styleDecl(n);
     if (s) lines.push('  ' + s);
   }
+  d.edges.forEach((e, i) => {
+    const w = e.width || DEFAULT_EDGE_W;
+    if (w !== DEFAULT_EDGE_W) lines.push('  linkStyle ' + i + ' stroke-width:' + w + 'px');
+  });
 
   // Only nodes are recorded. A group's box is always derived from its members,
   // so storing it would just be data that can go stale.
   lines.push(LAYOUT_HEADER);
   for (const n of d.nodes) lines.push(layoutLine(n));
+  d.edges.forEach((e, i) => {
+    if (e.fromAnchor || e.toAnchor) {
+      lines.push('%% link ' + i + ' ' + anchorText(e.fromAnchor) + ' ' + anchorText(e.toAnchor));
+    }
+  });
 
   return lines.join('\n');
 }
@@ -163,13 +195,22 @@ function stripFence(raw) {
 // declarations on edge lines, chained edges, `-- text -->` labels, and
 // whatever indentation it felt like using.
 
+// Longest opener first. `[/` and `[\` each have two possible closers (a
+// parallelogram and a trapezoid), so the pair that shares an opener is listed
+// with the more common one first and the reader falls through when its closer
+// isn't there.
 const BRACKETS = [
+  ['(((', ')))', 'doublecircle'],
   ['[[', ']]', 'subroutine'],
   ['[(', ')]', 'cylinder'],
   ['((', '))', 'circle'],
   ['([', '])', 'stadium'],
   ['{{', '}}', 'hexagon'],
   ['[/', '/]', 'parallelogram'],
+  ['[/', '\\]', 'trapezoid'],
+  ['[\\', '\\]', 'parallelogram_alt'],
+  ['[\\', '/]', 'trapezoid_alt'],
+  ['>', ']', 'flag'],
   ['[',  ']',  'rect'],
   ['(',  ')',  'round'],
   ['{',  '}',  'diamond'],
@@ -179,20 +220,21 @@ const BRACKETS = [
 // same as `A --> B` but asks dagre for a longer edge, and LLMs emit both.
 const LINK_RE = /^\s*(<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|([^|]*)\|\s*)?/;
 
-function linkStyleOf(token) {
-  if (token.includes('.')) return 'dotted';
-  if (token.startsWith('<')) return 'bidir';
-  if (token.includes('=')) return 'thick';
-  return /[>ox]$/.test(token) ? 'arrow' : 'line';
+function linkFromToken(token) {
+  const style = token.includes('.') ? 'dotted'
+    : token.startsWith('<') ? 'bidir'
+    : /[>ox]$/.test(token) ? 'arrow' : 'line';
+  return { style, width: token.includes('=') ? 3.5 : DEFAULT_EDGE_W };
 }
 
 // Reads one `ID` optionally followed by a shape bracket. Bracket contents are
 // scanned by hand rather than by regex because labels legitimately contain
-// brackets of their own.
+// brackets of their own. `-` is deliberately not an id character: without that,
+// the extremely common `A-->B` reads as a node called `A--`.
 function readNodeRef(s, i) {
   while (i < s.length && /\s/.test(s[i])) i++;
   const start = i;
-  while (i < s.length && /[A-Za-z0-9_-]/.test(s[i])) i++;
+  while (i < s.length && /[A-Za-z0-9_]/.test(s[i])) i++;
   if (i === start) return null;
   const id = s.slice(start, i);
 
@@ -216,20 +258,25 @@ function normalizeInlineLabels(line) {
     .replace(/-\.\s+([^.|]+?)\s+\.-+>?/g, '-.->|$1|');
 }
 
+function readAnchor(s) {
+  return s === '-' ? null : { side: s[0], t: +s.slice(1) };
+}
+
 function parseMermaid(text) {
   const d = newDiagram();
   const layout = {};
+  const anchors = {};
+  const widths = {};
   const styles = {};
-  const seen = new Set();
   let groupStack = [];
 
   const ensureNode = (ref) => {
     let n = nodeById(d, ref.id);
     if (!n) {
       n = { id: ref.id, label: ref.label != null ? ref.label : ref.id,
-            shape: ref.shape || 'rect', x: 0, y: 0, w: DEFAULT_W, h: DEFAULT_H, fill: '#ffffff' };
+            shape: ref.shape || 'rect', x: 0, y: 0, w: DEFAULT_W, h: DEFAULT_H,
+            fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE };
       d.nodes.push(n);
-      seen.add(n.id);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
       if (ref.label != null) n.label = ref.label;
@@ -247,6 +294,11 @@ function parseMermaid(text) {
       layout[layoutMatch[1]] = {
         x: +layoutMatch[2], y: +layoutMatch[3], w: +layoutMatch[4], h: +layoutMatch[5],
       };
+      continue;
+    }
+    const linkMatch = line.match(/^%%\s+link\s+(\d+)\s+([nesw][\d.]+|-)\s+([nesw][\d.]+|-)\s*$/);
+    if (linkMatch) {
+      anchors[+linkMatch[1]] = [readAnchor(linkMatch[2]), readAnchor(linkMatch[3])];
       continue;
     }
     if (line.startsWith('%%')) continue;
@@ -267,7 +319,14 @@ function parseMermaid(text) {
     const style = line.match(/^style\s+([A-Za-z0-9_-]+)\s+(.*)$/);
     if (style) { styles[style[1]] = style[2]; continue; }
 
-    if (/^(direction|classDef|class|linkStyle|click)\b/.test(line)) continue;
+    const linkStyle = line.match(/^linkStyle\s+([\d,\s]+?)\s+(.*)$/);
+    if (linkStyle) {
+      const w = linkStyle[2].match(/stroke-width:\s*([\d.]+)/);
+      if (w) linkStyle[1].split(',').forEach((i) => { widths[+i.trim()] = +w[1]; });
+      continue;
+    }
+
+    if (/^(direction|classDef|class|click)\b/.test(line)) continue;
 
     // Anything left is a node declaration or a chain of edges.
     const s = normalizeInlineLabels(line);
@@ -283,10 +342,12 @@ function parseMermaid(text) {
       if (!next) break;
       i = next.next;
       const target = ensureNode(next);
+      const kind = linkFromToken(link[1]);
       d.edges.push({
         from: prev.id, to: target.id,
         label: link[2] ? unquoteLabel(link[2]) : '',
-        style: linkStyleOf(link[1]),
+        style: kind.style, width: kind.width,
+        fromAnchor: null, toAnchor: null,
       });
       prev = target;
     }
@@ -297,7 +358,13 @@ function parseMermaid(text) {
     if (/fill:\s*none/.test(decl) && /stroke:\s*none/.test(decl)) n.shape = 'text';
     const fill = decl.match(/fill:\s*(#[0-9a-fA-F]{3,8})/);
     if (fill) n.fill = fill[1];
+    const size = decl.match(/font-size:\s*([\d.]+)/);
+    if (size) n.fontSize = +size[1];
   }
+  d.edges.forEach((e, i) => {
+    if (widths[i]) e.width = widths[i];
+    if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
+  });
 
   // Groups own their members, so a node listed in two is a contradiction;
   // first one wins.
@@ -315,11 +382,10 @@ function parseMermaid(text) {
 // simple layering -- imports are the secondary workflow and the user nudges
 // afterwards, so this only has to be non-stupid, not good.
 function applyLayout(d, layout) {
-  const placed = [];
   const unplaced = [];
   for (const n of d.nodes) {
     const l = layout[n.id];
-    if (l) { Object.assign(n, l); placed.push(n); } else { unplaced.push(n); }
+    if (l) Object.assign(n, l); else unplaced.push(n);
   }
 
   if (unplaced.length) {

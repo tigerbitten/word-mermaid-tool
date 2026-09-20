@@ -10,20 +10,38 @@ Prototype. Word desktop on Windows and Mac.
 
 ## What it does
 
-- Drag shapes from the palette onto the canvas. New blocks open for naming
-  straight away.
+- Fifteen block shapes on the palette, including the trapezoids that datapath
+  diagrams use for muxes and demuxes. Drag one onto the canvas, or
+  double-click empty canvas for a plain block.
+- **Right-click anything** for its options: text size, shape, fill, connector
+  thickness, copy/paste, group, z-order.
 - To rename a block: double-click it, press Enter or F2, or just select it and
   start typing. Enter commits, Shift+Enter gives you a second line.
+  Double-clicking a connector edits its label the same way.
 - To connect: hover a block and drag one of the blue dots onto another block.
-  Drop on empty canvas instead and you get a new block, already wired up.
-- Drag corners to resize. Shift-click to multi-select, group into a labelled
-  boundary, recolor.
+  There are several dots per side — the one you grab is where the connector
+  stays anchored. Drop on empty canvas instead and you get a new block, already
+  wired up. Several connectors off the same side fan out automatically.
+- Drag corners to resize. Shift-click, or shift-drag a box, to multi-select;
+  group into a labelled boundary; recolor.
 - Drag empty canvas to pan; scroll to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
   in (from an LLM, say) and hit *Apply to canvas*.
-- **Insert new diagram** drops the picture into the document. **Load selected**
-  picks a diagram back up out of a document you've reopened. **Replace
-  selected** swaps one in place.
+- **Insert into document** drops the picture in. **Open selected** picks a
+  diagram back up out of a document you've reopened. **Update selected** swaps
+  one in place.
+
+### Keyboard
+
+| | |
+|---|---|
+| `F2` / `Enter` / any letter | rename the selection |
+| `Ctrl+C` / `X` / `V` / `D` | copy, cut, paste, duplicate |
+| `Ctrl+A` | select all |
+| `Ctrl+G` / `Ctrl+Shift+G` | group / ungroup |
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| arrows (`Shift` for 1px) | nudge |
+| `Delete` | delete |
 
 ## Why the source lives in alt-text
 
@@ -46,7 +64,13 @@ It is stored as a fenced code block, verbatim, never encoded:
 The whole payload is valid Mermaid — paste it into mermaid.live and it renders.
 The `%%` lines are Mermaid comments, ignored by every renderer; they're how this
 tool remembers where you put each block, since Mermaid itself has no way to
-express node positions.
+express node positions. A `%% link` line records which side of a block a
+connector was pinned to, and only appears when you pinned one by hand.
+
+Everything else rides in standard Mermaid: fills and text sizes are `style`
+statements, connector thickness is a `linkStyle` statement, and a heavy
+connector is also written with Mermaid's own `==>` form so it stays heavy in
+other renderers.
 
 ### Pointing an LLM at the diagrams
 

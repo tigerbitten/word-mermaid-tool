@@ -24,16 +24,17 @@
   .pane { flex: 1; min-height: 0; display: flex; }
   .pane.hidden { display: none; }
 
-  #palette { width: 4.6rem; flex: none; border-right: 1px solid #e0e0e0;
-    overflow-y: auto; padding: 0.4rem 0; }
+  #palette { width: 7.6rem; flex: none; border-right: 1px solid #e0e0e0;
+    overflow-y: auto; padding: 0.3rem 0.2rem; display: grid; align-content: start;
+    grid-template-columns: 1fr 1fr; gap: 0.15rem; }
   .pal-item { display: flex; flex-direction: column; align-items: center;
-    padding: 0.45rem 0; border-radius: 5px; cursor: grab; }
+    padding: 0.35rem 0; border-radius: 5px; cursor: grab; }
   .pal-item:hover { background: #eef3fd; }
   .pal-item.armed { background: #dbeafe; box-shadow: inset 0 0 0 2px #2563eb; }
-  .pal-item span { font-size: 0.7rem; color: #555; margin-top: 0.15rem; }
+  .pal-item span { font-size: 0.65rem; color: #555; margin-top: 0.1rem; }
   /* Sized here rather than via SVG width/height attributes, which don't take
      rem units -- the icons have to scale with the rest of the UI. */
-  .pal-item svg { width: 2.9rem; height: 1.9rem; }
+  .pal-item svg { width: 2.5rem; height: 1.6rem; }
 
   #canvasWrap { flex: 1; min-width: 0; position: relative; }
   #canvasHost { width: 100%; height: 100%; }
@@ -48,11 +49,29 @@
     padding: 0.5rem 0.5rem 0.5rem 0.7rem; }
   .md-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
-  #inspector { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+  #inspector { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
     padding: 0.5rem 0.6rem; border-top: 1px solid #eee; flex: none; min-height: 2.8rem; }
   .hint { color: #777; font-size: 0.85rem; }
   .swatch { width: 1.5rem; height: 1.5rem; border: 1px solid #aaa; border-radius: 4px;
     cursor: pointer; padding: 0; }
+  .stepper { display: inline-flex; align-items: center; gap: 0.15rem; }
+  .stepper button { min-width: 1.9rem; padding: 0.35rem 0.4rem; }
+  .stepper .val { min-width: 1.8rem; text-align: center; font-size: 0.9rem; color: #333; }
+
+  /* The right-click menu. Same controls as the inspector, at the pointer. */
+  #menu { position: fixed; z-index: 30; background: #fff; border: 1px solid #c4c4c4;
+    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.20); padding: 0.25rem;
+    min-width: 12.5rem; max-width: 18rem; }
+  #menu.hidden { display: none; }
+  #menu .item { display: flex; width: 100%; align-items: center; justify-content: space-between;
+    gap: 0.6rem; text-align: left; border: none; background: none; padding: 0.4rem 0.55rem;
+    font-size: 0.9rem; border-radius: 4px; color: #111; }
+  #menu .item:hover:not(:disabled) { background: #eef3fd; }
+  #menu .item .key { color: #999; font-size: 0.78rem; }
+  #menu .row { display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.55rem; }
+  #menu .row > .cap { font-size: 0.8rem; color: #666; margin-right: auto; }
+  #menu hr { border: none; border-top: 1px solid #ededed; margin: 0.25rem 0.3rem; }
+  #menu select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
 
   /* Reserves its height when empty so nothing jumps when a message appears. */
   #status { white-space: pre-wrap; min-height: 1.3em; margin: 0 0.6rem; padding: 0.4rem 0.6rem;
@@ -78,7 +97,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v4</span>
+    <span class="build">build v5</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -105,6 +124,7 @@
 
   <div id="inspector"></div>
   <div id="status"></div>
+  <div id="menu" class="hidden"></div>
 
   <div id="actions">
     <button id="insertBtn" class="primary">Insert into document</button>
@@ -112,9 +132,9 @@
     <button id="loadBtn">Open selected</button>
   </div>
 
-<script src="diagram.js?v=4"></script>
-<script src="render.js?v=4"></script>
-<script src="editor.js?v=4"></script>
+<script src="diagram.js?v=5"></script>
+<script src="render.js?v=5"></script>
+<script src="editor.js?v=5"></script>
 <script>
   const RASTER_SCALE = 3;          // ~288dpi, so the inserted PNG stays sharp in print
   const PX_TO_PT = 0.75;           // 1 CSS px = 1/96in, 1pt = 1/72in
@@ -135,23 +155,28 @@
 %% BUS 240,40 140x56
 %% MEM 440,40 140x56`;
 
+  // Every shape the model can serialise, in the order they appear on the rail.
+  // Mux and Demux are the trapezoids: standard Mermaid, and exactly how a
+  // datapath diagram draws a multiplexer.
   const SHAPES_ALL = [
     ['rect', 'Block'], ['round', 'Rounded'], ['stadium', 'Port'], ['subroutine', 'Module'],
-    ['cylinder', 'Memory'], ['circle', 'Node'], ['diamond', 'Decision'], ['hexagon', 'Bus'],
-    ['parallelogram', 'I/O'], ['text', 'Label'],
+    ['cylinder', 'Memory'], ['hexagon', 'Bus'], ['diamond', 'Decision'], ['trapezoid', 'Mux'],
+    ['trapezoid_alt', 'Demux'], ['parallelogram', 'I/O'], ['parallelogram_alt', 'Data'],
+    ['circle', 'Node'], ['doublecircle', 'State'], ['flag', 'Tag'], ['text', 'Label'],
   ];
-  // The rail carries the five that get used constantly; the rest stay one
-  // dropdown away once a block is selected.
-  const PALETTE = ['rect', 'round', 'diamond', 'cylinder', 'text'];
-  const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#eceff1'];
-  const EDGE_KINDS = [['arrow', 'arrow'], ['line', 'plain line'], ['thick', 'thick / bus'],
-                      ['dotted', 'dotted'], ['bidir', 'both ways']];
+  const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#eceff1'];
+  const EDGE_KINDS = [['arrow', 'arrow'], ['line', 'plain line'], ['dotted', 'dotted'],
+                      ['bidir', 'both ways']];
+  const EDGE_WIDTHS = [[1, 'hairline'], [1.5, 'normal'], [2.5, 'heavy'], [4, 'bus'], [6, 'extra wide']];
+  const FONT_MIN = 8;
+  const FONT_MAX = 42;
 
   const shapeName = (s) => (SHAPES_ALL.find((e) => e[0] === s) || ['', s])[1];
 
   const src = document.getElementById('src');
   const statusEl = document.getElementById('status');
   const inspector = document.getElementById('inspector');
+  const menu = document.getElementById('menu');
   let wordReady = false;
 
   function setStatus(text, kind) {
@@ -180,8 +205,7 @@
   // swatch you drag always matches what you get.
   function buildPalette() {
     const host = document.getElementById('palette');
-    for (const shape of PALETTE) {
-      const name = shapeName(shape);
+    for (const [shape, name] of SHAPES_ALL) {
       const item = document.createElement('div');
       item.className = 'pal-item';
       item.draggable = true;
@@ -225,78 +249,213 @@
     }
   }
 
-  // The inspector is the only place controls appear, and only for whatever is
-  // actually selected -- nothing to read or ignore when nothing is selected.
+  // --- controls, shared by the inspector bar and the right-click menu -----
+
+  function button(text, fn) {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function dropdown(options, current, fn) {
+    const s = document.createElement('select');
+    for (const [value, name] of options) {
+      const o = document.createElement('option');
+      o.value = value; o.textContent = name;
+      if (String(value) === String(current)) o.selected = true;
+      s.appendChild(o);
+    }
+    s.addEventListener('change', () => fn(s.value));
+    return s;
+  }
+
+  function shapeSelect(nodes) {
+    const current = nodes.length === 1 ? nodes[0].shape : null;
+    return dropdown(SHAPES_ALL, current, (v) => applyToNodes((n) => { n.shape = v; fitNodeSize(n); }));
+  }
+
+  function fillSwatches(target) {
+    for (const color of FILLS) {
+      const b = document.createElement('button');
+      b.className = 'swatch';
+      b.title = 'fill';
+      b.style.background = color;
+      b.addEventListener('click', () => applyToNodes((n) => { n.fill = color; }));
+      target.appendChild(b);
+    }
+  }
+
+  // The box is re-derived from the label at the new size, otherwise shrinking
+  // the text just leaves a box full of air.
+  function setFontSize(nodes, size) {
+    const v = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
+    applyToNodes((n) => { n.fontSize = v; fitNodeSize(n, true); });
+  }
+
+  function fontStepper(nodes) {
+    const wrap = document.createElement('span');
+    wrap.className = 'stepper';
+    const current = nodes[0].fontSize || DEFAULT_FONT_SIZE;
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = current;
+    const step = (delta) => {
+      setFontSize(nodes, current + delta);
+      val.textContent = Math.max(FONT_MIN, Math.min(FONT_MAX, current + delta));
+    };
+    wrap.appendChild(button('−', () => step(-2)));
+    wrap.appendChild(val);
+    wrap.appendChild(button('+', () => step(2)));
+    return wrap;
+  }
+
+  function edgeStyleSelect(edge) {
+    return dropdown(EDGE_KINDS, edge.style, (v) => applyToEdge((e) => { e.style = v; }));
+  }
+
+  function edgeWidthSelect(edge) {
+    return dropdown(EDGE_WIDTHS, edge.width || DEFAULT_EDGE_W,
+                    (v) => applyToEdge((e) => { e.width = +v; }));
+  }
+
+  function edgeLabelInput(edge) {
+    const label = document.createElement('input');
+    label.type = 'text';
+    label.placeholder = 'label';
+    label.value = edge.label;
+    label.size = 10;
+    label.addEventListener('change', () => applyToEdge((e) => { e.label = label.value; }));
+    label.addEventListener('keydown', (ev) => ev.stopPropagation());
+    return label;
+  }
+
+  // The inspector is the always-visible surface, and only shows controls for
+  // whatever is actually selected -- nothing to read or ignore otherwise.
   function refreshInspector() {
     inspector.innerHTML = '';
     const info = selectionInfo();
     const add = (n) => inspector.appendChild(n);
-
     const hint = (text) => {
       const s = document.createElement('span');
       s.className = 'hint';
       s.textContent = text;
       return s;
     };
-    const button = (text, fn) => {
-      const b = document.createElement('button');
-      b.textContent = text;
-      b.addEventListener('click', fn);
-      return b;
-    };
-    const dropdown = (options, current, fn) => {
-      const s = document.createElement('select');
-      for (const [value, name] of options) {
-        const o = document.createElement('option');
-        o.value = value; o.textContent = name;
-        if (value === current) o.selected = true;
-        s.appendChild(o);
-      }
-      s.addEventListener('change', () => fn(s.value));
-      return s;
-    };
 
     if (info.edge) {
-      add(dropdown(EDGE_KINDS, info.edge.style, (v) => applyToEdge((e) => { e.style = v; })));
-      const label = document.createElement('input');
-      label.type = 'text';
-      label.placeholder = 'label';
-      label.value = info.edge.label;
-      label.size = 10;
-      label.addEventListener('change', () => applyToEdge((e) => { e.label = label.value; }));
-      label.addEventListener('keydown', (ev) => ev.stopPropagation());
-      add(label);
+      add(edgeStyleSelect(info.edge));
+      add(edgeWidthSelect(info.edge));
+      add(edgeLabelInput(info.edge));
       add(button('Delete', deleteSelection));
       return;
     }
 
     if (info.nodes.length) {
-      const current = info.nodes.length === 1 ? info.nodes[0].shape : null;
-      add(dropdown(SHAPES_ALL, current, (v) => applyToNodes((n) => { n.shape = v; fitNodeSize(n); })));
-      for (const color of FILLS) {
-        const b = document.createElement('button');
-        b.className = 'swatch';
-        b.style.background = color;
-        b.addEventListener('click', () => applyToNodes((n) => { n.fill = color; }));
-        add(b);
-      }
+      add(shapeSelect(info.nodes));
+      add(fontStepper(info.nodes));
+      fillSwatches(inspector);
       add(button('Group', () => reportRefusal(groupSelection(), 'grouped')));
+      if (info.inGroup) add(button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped')));
       add(button('Delete', deleteSelection));
       return;
     }
 
     if (info.groups.length) {
-      add(hint('Group'));
+      add(hint('Group "' + info.groups[0].label + '"'));
+      add(button('Rename', () => editSelectedLabel()));
       add(button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped')));
       add(button('Delete', deleteSelection));
       return;
     }
-    add(hint('Drag a shape in. Double-click or just type to rename. Drag a blue dot to connect — drop on empty space to make a new block.'));
+    add(hint('Drag a shape in, or double-click the canvas. Double-click a block to rename it. ' +
+             'Drag a blue dot to connect. Right-click for everything else.'));
   }
 
   // groupSelection/ungroupSelection return null on success, a reason on refusal.
   function reportRefusal(reason, successText) {
     setStatus(reason || successText, reason ? 'error' : 'success');
+  }
+
+  // --- right-click menu ---------------------------------------------------
+
+  function closeMenu() { menu.classList.add('hidden'); }
+
+  function openMenu(x, y) {
+    const info = selectionInfo();
+    const at = lastMenuPoint();
+    menu.innerHTML = '';
+
+    const act = (text, key, fn, enabled) => {
+      const b = document.createElement('button');
+      b.className = 'item';
+      b.disabled = enabled === false;
+      b.appendChild(document.createTextNode(text));
+      if (key) {
+        const k = document.createElement('span');
+        k.className = 'key';
+        k.textContent = key;
+        b.appendChild(k);
+      }
+      b.addEventListener('click', () => { closeMenu(); fn(); });
+      menu.appendChild(b);
+      return b;
+    };
+    const row = (caption) => {
+      const r = document.createElement('div');
+      r.className = 'row';
+      if (caption) {
+        const c = document.createElement('span');
+        c.className = 'cap';
+        c.textContent = caption;
+        r.appendChild(c);
+      }
+      menu.appendChild(r);
+      return r;
+    };
+    const sep = () => menu.appendChild(document.createElement('hr'));
+
+    if (info.edge) {
+      act('Edit label', 'F2', () => editSelectedLabel());
+      row('Style').appendChild(edgeStyleSelect(info.edge));
+      row('Thickness').appendChild(edgeWidthSelect(info.edge));
+      sep();
+      act('Delete connector', 'Del', deleteSelection);
+    } else if (info.nodes.length) {
+      act('Edit text', 'F2', () => editSelectedLabel());
+      row('Text size').appendChild(fontStepper(info.nodes));
+      row('Shape').appendChild(shapeSelect(info.nodes));
+      fillSwatches(row('Fill'));
+      sep();
+      act('Duplicate', 'Ctrl+D', () => { if (copySelection()) pasteClipboard(20, 20); });
+      act('Copy', 'Ctrl+C', copySelection);
+      act('Paste here', 'Ctrl+V', () => pasteAt(at), hasClipboard());
+      act('Delete', 'Del', deleteSelection);
+      sep();
+      act('Group', 'Ctrl+G', () => reportRefusal(groupSelection(), 'grouped'));
+      act('Ungroup', 'Ctrl+Shift+G', () => reportRefusal(ungroupSelection(), 'ungrouped'), info.inGroup);
+      act('Bring to front', '', () => reorderSelection(true));
+      act('Send to back', '', () => reorderSelection(false));
+    } else if (info.groups.length) {
+      act('Rename group', 'F2', () => editSelectedLabel());
+      act('Ungroup', 'Ctrl+Shift+G', () => reportRefusal(ungroupSelection(), 'ungrouped'));
+      sep();
+      act('Delete group and blocks', 'Del', deleteSelection);
+    } else {
+      act('Add block here', '', () => addNode('rect', at.x - 70, at.y - 28));
+      act('Paste here', 'Ctrl+V', () => pasteAt(at), hasClipboard());
+      sep();
+      act('Select all', 'Ctrl+A', selectAll);
+      act('Fit to view', '', fitView);
+    }
+
+    // Measured after filling, then nudged back on-screen near the edges.
+    menu.classList.remove('hidden');
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
   }
 
   function onModelChanged() {
@@ -430,10 +589,18 @@
     document.getElementById('mdPane').classList.toggle('hidden', canvas);
     document.getElementById('tabCanvas').classList.toggle('active', canvas);
     document.getElementById('tabMd').classList.toggle('active', !canvas);
+    closeMenu();
   }
 
   buildPalette();
-  initEditor(document.getElementById('canvasHost'), onModelChanged, onViewChanged);
+  initEditor(document.getElementById('canvasHost'), onModelChanged, onViewChanged, openMenu);
+
+  // Capture phase, so it closes before whatever was clicked runs -- except
+  // clicks inside the menu itself.
+  document.addEventListener('pointerdown', (ev) => {
+    if (!menu.contains(ev.target)) closeMenu();
+  }, true);
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
 
   document.getElementById('tabCanvas').addEventListener('click', () => showTab('canvas'));
   document.getElementById('tabMd').addEventListener('click', () => showTab('md'));

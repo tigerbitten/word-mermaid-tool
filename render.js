@@ -12,31 +12,31 @@
 // than <marker> elements.
 
 const FONT_STACK = 'Calibri, "Segoe UI", Helvetica, Arial, sans-serif';
-const FONT_SIZE = 13;
-const LINE_HEIGHT = 16;
 const LABEL_PAD_X = 14;
 const LABEL_PAD_Y = 12;
 const CORNER_R = 8;
-const ARROW_LEN = 10;
-const ARROW_HALF = 4.5;
 const EXPORT_PAD = 24;
+// How far a connector runs straight out of a block before it is allowed to
+// turn. Without it, edges leaving adjacent ports would kink immediately and
+// read as one smudge rather than as separate signals.
+const STUB = 16;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const SVG_STYLE = `
   .wm-shape { fill: #ffffff; stroke: #333333; stroke-width: 1.5; }
-  .wm-label { font-family: ${FONT_STACK}; font-size: ${FONT_SIZE}px; fill: #111111;
+  .wm-label { font-family: ${FONT_STACK}; font-size: ${DEFAULT_FONT_SIZE}px; fill: #111111;
               text-anchor: middle; dominant-baseline: middle; }
-  .wm-edge  { fill: none; stroke: #555555; stroke-width: 1.5; stroke-linejoin: round;
+  .wm-edge  { fill: none; stroke: #555555; stroke-width: ${DEFAULT_EDGE_W}; stroke-linejoin: round;
               stroke-linecap: round; }
-  .wm-edge-thick  { stroke-width: 3.5; }
   .wm-edge-dotted { stroke-dasharray: 5 4; }
   .wm-arrow { fill: #555555; stroke: none; }
   .wm-edge-label { font-family: ${FONT_STACK}; font-size: 12px; fill: #333333;
                    text-anchor: middle; dominant-baseline: middle; }
   .wm-edge-label-bg { fill: #ffffff; stroke: none; }
-  .wm-group { fill: #f7f7f9; stroke: #9aa0a6; stroke-width: 1.2; stroke-dasharray: 6 4; }
-  .wm-group-title { font-family: ${FONT_STACK}; font-size: 12px; fill: #5f6368;
+  .wm-group { fill: #f4f6fb; stroke: #6b7fb3; stroke-width: 1.5; stroke-dasharray: 8 4; }
+  .wm-group-tab { fill: #6b7fb3; stroke: none; }
+  .wm-group-title { font-family: ${FONT_STACK}; font-size: 12px; fill: #ffffff;
                     text-anchor: start; dominant-baseline: middle; font-weight: bold; }
 `;
 
@@ -50,15 +50,15 @@ function el(tag, attrs, parent) {
 // Text measurement via a 2D context -- synchronous, and matches what the SVG
 // will do closely enough for wrapping decisions.
 let measureCtx = null;
-function textWidth(s) {
-  if (!measureCtx) {
-    measureCtx = document.createElement('canvas').getContext('2d');
-    measureCtx.font = FONT_SIZE + 'px ' + FONT_STACK;
-  }
+function textWidth(s, size) {
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+  measureCtx.font = (size || DEFAULT_FONT_SIZE) + 'px ' + FONT_STACK;
   return measureCtx.measureText(s).width;
 }
 
-function wrapLabel(label, maxWidth) {
+function lineH(size) { return Math.round((size || DEFAULT_FONT_SIZE) * 1.25); }
+
+function wrapLabel(label, maxWidth, size) {
   const out = [];
   for (const para of String(label || '').split('\n')) {
     const words = para.split(/\s+/).filter(Boolean);
@@ -66,7 +66,7 @@ function wrapLabel(label, maxWidth) {
     let line = words[0];
     for (let i = 1; i < words.length; i++) {
       const candidate = line + ' ' + words[i];
-      if (textWidth(candidate) <= maxWidth) line = candidate;
+      if (textWidth(candidate, size) <= maxWidth) line = candidate;
       else { out.push(line); line = words[i]; }
     }
     out.push(line);
@@ -76,10 +76,14 @@ function wrapLabel(label, maxWidth) {
 
 // Grows a node to fit its label. Never shrinks below what the user dragged it
 // to -- resizing is theirs to control, this only prevents clipped text.
-function fitNodeSize(n) {
-  const lines = wrapLabel(n.label, Math.max(60, n.w - LABEL_PAD_X * 2));
-  const needW = Math.ceil(Math.max(...lines.map(textWidth), 0)) + LABEL_PAD_X * 2;
-  const needH = lines.length * LINE_HEIGHT + LABEL_PAD_Y * 2;
+// `tight` re-derives the box instead of only growing it, which is what a text
+// size change needs: shrinking the font otherwise leaves a box full of air.
+function fitNodeSize(n, tight) {
+  const size = n.fontSize || DEFAULT_FONT_SIZE;
+  const lines = wrapLabel(n.label, Math.max(60, n.w - LABEL_PAD_X * 2), size);
+  const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size)), 0)) + LABEL_PAD_X * 2;
+  const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2;
+  if (tight) { n.w = Math.max(60, needW); n.h = Math.max(36, needH); return; }
   n.w = Math.max(n.w, needW, 60);
   n.h = Math.max(n.h, needH, 36);
 }
@@ -88,6 +92,7 @@ function shapeElement(n) {
   const { x, y, w, h } = n;
   const cx = x + w / 2;
   const cy = y + h / 2;
+  const slant = Math.min(20, w * 0.2);
   switch (n.shape) {
     case 'round':
       return [el('rect', { x, y, width: w, height: h, rx: 12, class: 'wm-shape' })];
@@ -111,6 +116,11 @@ function shapeElement(n) {
     }
     case 'circle':
       return [el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape' })];
+    case 'doublecircle':
+      return [
+        el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape' }),
+        el('ellipse', { cx, cy, rx: w / 2 - 5, ry: h / 2 - 5, class: 'wm-shape' }),
+      ];
     case 'diamond':
       return [el('polygon', {
         points: `${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`, class: 'wm-shape',
@@ -122,12 +132,27 @@ function shapeElement(n) {
         class: 'wm-shape',
       })];
     }
-    case 'parallelogram': {
-      const s = Math.min(20, w * 0.2);
+    case 'parallelogram':
       return [el('polygon', {
-        points: `${x + s},${y} ${x + w},${y} ${x + w - s},${y + h} ${x},${y + h}`, class: 'wm-shape',
+        points: `${x + slant},${y} ${x + w},${y} ${x + w - slant},${y + h} ${x},${y + h}`, class: 'wm-shape',
       })];
-    }
+    case 'parallelogram_alt':
+      return [el('polygon', {
+        points: `${x},${y} ${x + w - slant},${y} ${x + w},${y + h} ${x + slant},${y + h}`, class: 'wm-shape',
+      })];
+    // Narrow-top trapezoid: the way a mux is drawn in every datapath diagram.
+    case 'trapezoid':
+      return [el('polygon', {
+        points: `${x + slant},${y} ${x + w - slant},${y} ${x + w},${y + h} ${x},${y + h}`, class: 'wm-shape',
+      })];
+    case 'trapezoid_alt':
+      return [el('polygon', {
+        points: `${x},${y} ${x + w},${y} ${x + w - slant},${y + h} ${x + slant},${y + h}`, class: 'wm-shape',
+      })];
+    case 'flag':
+      return [el('path', {
+        d: `M${x} ${y}Q${x + slant} ${cy} ${x} ${y + h}H${x + w}V${y}Z`, class: 'wm-shape',
+      })];
     case 'text':
       return [];
     default:
@@ -146,21 +171,28 @@ function drawNode(parent, n) {
     else shape.style.fill = 'none';
     g.appendChild(shape);
   });
-  const lines = wrapLabel(n.label, n.w - LABEL_PAD_X * 2);
+  const size = n.fontSize || DEFAULT_FONT_SIZE;
+  const lh = lineH(size);
+  const lines = wrapLabel(n.label, n.w - LABEL_PAD_X * 2, size);
   // A cylinder's rim cuts across the middle of the box, so its label sits below it.
   const shift = n.shape === 'cylinder' ? Math.min(12, n.h / 4) * 0.75 : 0;
-  const startY = n.y + n.h / 2 + shift - ((lines.length - 1) * LINE_HEIGHT) / 2;
+  const startY = n.y + n.h / 2 + shift - ((lines.length - 1) * lh) / 2;
   const text = el('text', { x: n.x + n.w / 2, y: startY, class: 'wm-label' }, g);
+  if (size !== DEFAULT_FONT_SIZE) text.style.fontSize = size + 'px';
   lines.forEach((line, i) => {
-    el('tspan', { x: n.x + n.w / 2, dy: i === 0 ? 0 : LINE_HEIGHT }, text).textContent = line;
+    el('tspan', { x: n.x + n.w / 2, dy: i === 0 ? 0 : lh }, text).textContent = line;
   });
   return g;
 }
 
+// The title sits in a filled tab rather than as loose grey text: a group you
+// can't see is a group you think didn't happen.
 function drawGroup(parent, g) {
   const node = el('g', { 'data-id': g.id, 'data-kind': 'group' }, parent);
-  el('rect', { x: g.x, y: g.y, width: g.w, height: g.h, rx: 6, class: 'wm-group' }, node);
-  el('text', { x: g.x + 12, y: g.y + 14, class: 'wm-group-title' }, node).textContent = g.label;
+  el('rect', { x: g.x, y: g.y, width: g.w, height: g.h, rx: 8, class: 'wm-group' }, node);
+  const tabW = Math.min(g.w, textWidth(g.label, 12) + 20);
+  el('rect', { x: g.x, y: g.y, width: tabW, height: GROUP_TITLE_H, rx: 6, class: 'wm-group-tab' }, node);
+  el('text', { x: g.x + 10, y: g.y + GROUP_TITLE_H / 2, class: 'wm-group-title' }, node).textContent = g.label;
   return node;
 }
 
@@ -170,40 +202,33 @@ function drawGroup(parent, g) {
 // square corners, not curves -- this is most of why the output reads as a real
 // block diagram rather than as a flowchart.
 
-function routePoints(a, b) {
-  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
-  const bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+const DIRS = { n: { x: 0, y: -1 }, s: { x: 0, y: 1 }, e: { x: 1, y: 0 }, w: { x: -1, y: 0 } };
 
-  if (a === b) {
-    const r = 26;
-    return [
-      { x: a.x + a.w, y: ac.y - 10 },
-      { x: a.x + a.w + r, y: ac.y - 10 },
-      { x: a.x + a.w + r, y: ac.y + 10 },
-      { x: a.x + a.w, y: ac.y + 10 },
-    ];
-  }
+function centerOf(n) { return { x: n.x + n.w / 2, y: n.y + n.h / 2 }; }
 
+// Which side of `a` faces `b`.
+function facingSide(a, b) {
+  const ac = centerOf(a);
+  const bc = centerOf(b);
   const dx = bc.x - ac.x;
   const dy = bc.y - ac.y;
-  let pts;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const p0 = { x: dx >= 0 ? a.x + a.w : a.x, y: ac.y };
-    const p1 = { x: dx >= 0 ? b.x : b.x + b.w, y: bc.y };
-    const mx = (p0.x + p1.x) / 2;
-    pts = [p0, { x: mx, y: p0.y }, { x: mx, y: p1.y }, p1];
-  } else {
-    const p0 = { x: ac.x, y: dy >= 0 ? a.y + a.h : a.y };
-    const p1 = { x: bc.x, y: dy >= 0 ? b.y : b.y + b.h };
-    const my = (p0.y + p1.y) / 2;
-    pts = [p0, { x: p0.x, y: my }, { x: p1.x, y: my }, p1];
-  }
+  return Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'e' : 'w') : (dy >= 0 ? 's' : 'n');
+}
 
+// `t` runs 0..1 along the side, left-to-right or top-to-bottom.
+function anchorPoint(n, side, t) {
+  if (side === 'n') return { x: n.x + n.w * t, y: n.y };
+  if (side === 's') return { x: n.x + n.w * t, y: n.y + n.h };
+  if (side === 'w') return { x: n.x, y: n.y + n.h * t };
+  return { x: n.x + n.w, y: n.y + n.h * t };
+}
+
+// Drops duplicate points and any interior point sitting on the line between its
+// neighbours. A straight hop would otherwise keep redundant midpoints, which
+// split the run and push the edge label up against one box.
+function simplify(pts) {
   const spaced = pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) > 0.5);
-
-  // Drop interior points that sit on the line between their neighbours. A
-  // straight horizontal hop would otherwise keep a redundant midpoint, which
-  // splits the run in two and pushes the edge label up against one box.
+  if (spaced.length < 3) return spaced;
   const out = [spaced[0]];
   for (let i = 1; i < spaced.length - 1; i++) {
     const a = out[out.length - 1];
@@ -213,6 +238,76 @@ function routePoints(a, b) {
   }
   out.push(spaced[spaced.length - 1]);
   return out;
+}
+
+function orthRoute(p0, s0, p1, s1) {
+  const a = { x: p0.x + DIRS[s0].x * STUB, y: p0.y + DIRS[s0].y * STUB };
+  const b = { x: p1.x + DIRS[s1].x * STUB, y: p1.y + DIRS[s1].y * STUB };
+  const h0 = DIRS[s0].y === 0;
+  const h1 = DIRS[s1].y === 0;
+  let mid;
+  if (h0 && h1) { const mx = (a.x + b.x) / 2; mid = [{ x: mx, y: a.y }, { x: mx, y: b.y }]; }
+  else if (!h0 && !h1) { const my = (a.y + b.y) / 2; mid = [{ x: a.x, y: my }, { x: b.x, y: my }]; }
+  else if (h0) mid = [{ x: b.x, y: a.y }];
+  else mid = [{ x: a.x, y: b.y }];
+  return simplify([p0, a].concat(mid, [b, p1]));
+}
+
+function selfLoopPoints(n) {
+  const cy = n.y + n.h / 2;
+  const r = 26;
+  return [
+    { x: n.x + n.w, y: cy - 10 },
+    { x: n.x + n.w + r, y: cy - 10 },
+    { x: n.x + n.w + r, y: cy + 10 },
+    { x: n.x + n.w, y: cy + 10 },
+  ];
+}
+
+// All edges are routed in one pass rather than one at a time, because several
+// edges leaving the same side of a block have to be spread along it instead of
+// piling onto one midpoint. That spreading is most of what makes a fan-out
+// read as separate signals. Returns one point array per edge (null if an
+// endpoint is missing), indexed to match d.edges.
+function edgeGeometry(d) {
+  const slots = d.edges.map((e) => {
+    const a = nodeById(d, e.from);
+    const b = nodeById(d, e.to);
+    if (!a || !b) return null;
+    if (a === b) return { a, self: true };
+    const fa = e.fromAnchor || {};
+    const ta = e.toAnchor || {};
+    return {
+      a, b,
+      from: { side: fa.side || facingSide(a, b), t: fa.t, other: b },
+      to: { side: ta.side || facingSide(b, a), t: ta.t, other: a },
+    };
+  });
+
+  const buckets = new Map();
+  for (const s of slots) {
+    if (!s || s.self) continue;
+    for (const [end, node] of [[s.from, s.a], [s.to, s.b]]) {
+      if (end.t != null) continue;
+      const key = node.id + end.side;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(end);
+    }
+  }
+  for (const list of buckets.values()) {
+    // Order the fan by where the other end actually sits, so connectors don't
+    // cross each other on the way out.
+    const axis = list[0].side === 'n' || list[0].side === 's' ? 'x' : 'y';
+    list.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis]);
+    list.forEach((end, i) => { end.t = (i + 1) / (list.length + 1); });
+  }
+
+  return slots.map((s) => {
+    if (!s) return null;
+    if (s.self) return selfLoopPoints(s.a);
+    return orthRoute(anchorPoint(s.a, s.from.side, s.from.t), s.from.side,
+                     anchorPoint(s.b, s.to.side, s.to.t), s.to.side);
+  });
 }
 
 function roundedPathD(pts, r) {
@@ -231,14 +326,14 @@ function roundedPathD(pts, r) {
   return d + `L${last.x} ${last.y}`;
 }
 
-function arrowHeadD(tip, from) {
-  const len = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
-  const ux = (tip.x - from.x) / len;
-  const uy = (tip.y - from.y) / len;
-  const bx = tip.x - ux * ARROW_LEN;
-  const by = tip.y - uy * ARROW_LEN;
-  return `M${tip.x} ${tip.y}L${bx - uy * ARROW_HALF} ${by + ux * ARROW_HALF}` +
-         `L${bx + uy * ARROW_HALF} ${by - ux * ARROW_HALF}Z`;
+function arrowHeadD(tip, from, len, half) {
+  const dist = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
+  const ux = (tip.x - from.x) / dist;
+  const uy = (tip.y - from.y) / dist;
+  const bx = tip.x - ux * len;
+  const by = tip.y - uy * len;
+  return `M${tip.x} ${tip.y}L${bx - uy * half} ${by + ux * half}` +
+         `L${bx + uy * half} ${by - ux * half}Z`;
 }
 
 // Pulls the line back so it stops at the base of the arrowhead instead of
@@ -259,7 +354,7 @@ function trimEnd(pts, amount) {
 // Labels go on the longest leg rather than at the path's middle index, which
 // often lands exactly on a corner or under an arrowhead.
 function longestSegmentMidpoint(pts) {
-  let best = 0;
+  let best = 1;
   let bestLen = -1;
   for (let i = 1; i < pts.length; i++) {
     const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
@@ -268,32 +363,36 @@ function longestSegmentMidpoint(pts) {
   return { x: (pts[best].x + pts[best - 1].x) / 2, y: (pts[best].y + pts[best - 1].y) / 2 };
 }
 
-function drawEdge(parent, e, from, to, index) {
+function drawEdge(parent, e, pts, index) {
   const g = el('g', { 'data-index': index, 'data-kind': 'edge' }, parent);
-  const pts = routePoints(from, to);
+  const w = e.width || DEFAULT_EDGE_W;
+  // Arrowheads grow with the line, or a bus-width connector ends in a pinprick.
+  const headLen = 7 + w * 2;
+  const headHalf = 3 + w * 1.1;
   const hasEndArrow = e.style !== 'line';
   const hasStartArrow = e.style === 'bidir';
 
   let linePts = pts;
-  if (hasEndArrow) linePts = trimEnd(linePts, ARROW_LEN - 1);
-  if (hasStartArrow) linePts = trimEnd(linePts.slice().reverse(), ARROW_LEN - 1).reverse();
+  if (hasEndArrow) linePts = trimEnd(linePts, headLen - 1);
+  if (hasStartArrow) linePts = trimEnd(linePts.slice().reverse(), headLen - 1).reverse();
 
-  let cls = 'wm-edge';
-  if (e.style === 'thick') cls += ' wm-edge-thick';
-  if (e.style === 'dotted') cls += ' wm-edge-dotted';
-  el('path', { d: roundedPathD(linePts, CORNER_R), class: cls }, g);
+  const path = el('path', {
+    d: roundedPathD(linePts, CORNER_R),
+    class: e.style === 'dotted' ? 'wm-edge wm-edge-dotted' : 'wm-edge',
+  }, g);
+  if (w !== DEFAULT_EDGE_W) path.style.strokeWidth = w;
 
   if (hasEndArrow) {
-    el('path', { d: arrowHeadD(pts[pts.length - 1], pts[pts.length - 2]), class: 'wm-arrow' }, g);
+    el('path', { d: arrowHeadD(pts[pts.length - 1], pts[pts.length - 2], headLen, headHalf), class: 'wm-arrow' }, g);
   }
   if (hasStartArrow) {
-    el('path', { d: arrowHeadD(pts[0], pts[1]), class: 'wm-arrow' }, g);
+    el('path', { d: arrowHeadD(pts[0], pts[1], headLen, headHalf), class: 'wm-arrow' }, g);
   }
 
   if (e.label) {
     const mid = longestSegmentMidpoint(pts);
-    const w = textWidth(e.label) + 10;
-    el('rect', { x: mid.x - w / 2, y: mid.y - 9, width: w, height: 18, class: 'wm-edge-label-bg' }, g);
+    const lw = textWidth(e.label, 12) + 10;
+    el('rect', { x: mid.x - lw / 2, y: mid.y - 9, width: lw, height: 18, class: 'wm-edge-label-bg' }, g);
     el('text', { x: mid.x, y: mid.y, class: 'wm-edge-label' }, g).textContent = e.label;
   }
   return g;
@@ -307,11 +406,7 @@ function drawDiagram(parent, d) {
   const nodeLayer = el('g', { 'data-layer': 'nodes' }, parent);
 
   for (const g of d.groups) if (g.w > 0) drawGroup(groupLayer, g);
-  d.edges.forEach((e, i) => {
-    const from = nodeById(d, e.from);
-    const to = nodeById(d, e.to);
-    if (from && to) drawEdge(edgeLayer, e, from, to, i);
-  });
+  edgeGeometry(d).forEach((pts, i) => { if (pts) drawEdge(edgeLayer, d.edges[i], pts, i); });
   for (const n of d.nodes) drawNode(nodeLayer, n);
 }
 

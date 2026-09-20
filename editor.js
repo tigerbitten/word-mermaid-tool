@@ -16,6 +16,7 @@ const EDITOR_STYLE = `
   .wm-port { fill: #fff; stroke: #2563eb; cursor: crosshair; }
   .wm-handle { fill: #fff; stroke: #2563eb; }
   .wm-rubber { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
+  .wm-marquee { fill: #2563eb; fill-opacity: 0.08; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-droptarget { fill: none; stroke: #16a34a; }
 `;
 
@@ -24,7 +25,8 @@ const PAGE_STYLE = `
   .wm-label-input { position: absolute; z-index: 5; box-sizing: border-box; text-align: center;
     font-family: Calibri, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.25;
     border: 2px solid #2563eb; border-radius: 3px; padding: 3px 4px; outline: none;
-    resize: none; overflow: hidden; background: #fff; color: #111; }
+    resize: none; overflow: hidden; background: #fff; color: #111;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15); }
 `;
 
 let model = newDiagram();
@@ -35,6 +37,7 @@ let chrome = null;
 let gridPattern = null;
 let notify = () => {};
 let onView = () => {};
+let onMenu = () => {};
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 3;
@@ -51,6 +54,8 @@ let drag = null;
 let armedShape = null;
 let undoStack = [];
 let redoStack = [];
+let clipboard = null;
+let menuPoint = { x: 0, y: 0 };
 
 const snap = (v) => Math.round(v / GRID) * GRID;
 
@@ -63,10 +68,11 @@ function toModel(ev) {
   return { x: (ev.clientX - r.left - view.x) / view.zoom, y: (ev.clientY - r.top - view.y) / view.zoom };
 }
 
-function initEditor(hostEl, onChange, onViewChange) {
+function initEditor(hostEl, onChange, onViewChange, onContextMenu) {
   host = hostEl;
   notify = onChange || (() => {});
   onView = onViewChange || (() => {});
+  onMenu = onContextMenu || (() => {});
   host.classList.add('wm-host');
 
   const pageStyle = document.createElement('style');
@@ -92,6 +98,7 @@ function initEditor(hostEl, onChange, onViewChange) {
   window.addEventListener('pointerup', onPointerUp);
   svg.addEventListener('wheel', onWheel, { passive: false });
   svg.addEventListener('dblclick', onDoubleClick);
+  svg.addEventListener('contextmenu', onContext);
   window.addEventListener('keydown', onKeyDown);
 
   host.addEventListener('dragover', (ev) => { ev.preventDefault(); });
@@ -124,10 +131,39 @@ function render() {
   drawChrome();
 }
 
+// Ports are spaced roughly every 45px along a side, so a tall or wide block
+// offers more places to land than a small one -- which is the whole point of
+// not being stuck with four.
+function portSpots(n) {
+  const out = [];
+  for (const side of ['n', 'e', 's', 'w']) {
+    const len = side === 'n' || side === 's' ? n.w : n.h;
+    const count = Math.max(1, Math.min(5, Math.round(len / 45)));
+    for (let i = 1; i <= count; i++) {
+      const t = i / (count + 1);
+      const p = anchorPoint(n, side, t);
+      out.push({ x: p.x, y: p.y, side, t });
+    }
+  }
+  return out;
+}
+
+function nearestPort(n, p, maxDist) {
+  let best = null;
+  let bestD = maxDist;
+  for (const s of portSpots(n)) {
+    const dd = Math.hypot(s.x - p.x, s.y - p.y);
+    if (dd < bestD) { bestD = dd; best = s; }
+  }
+  return best;
+}
+
 // Chrome is drawn inside the zoom transform, so every size is divided by the
 // zoom to keep handles and hairlines a constant size on screen.
 function drawChrome() {
   const s = 1 / view.zoom;
+  const only = sel.size === 1 ? nodeById(model, [...sel][0]) : null;
+  let portNode = hoverNode || only;
 
   for (const id of sel) {
     const box = nodeById(model, id) || model.groups.find((g) => g.id === id);
@@ -139,48 +175,50 @@ function drawChrome() {
   }
 
   if (selEdge >= 0 && model.edges[selEdge]) {
-    const e = model.edges[selEdge];
-    const a = nodeById(model, e.from);
-    const b = nodeById(model, e.to);
-    if (a && b) {
-      el('path', { d: roundedPathD(routePoints(a, b), CORNER_R), class: 'wm-seledge', 'stroke-width': 5 * s }, chrome);
-    }
+    const pts = edgeGeometry(model)[selEdge];
+    if (pts) el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
+  }
+
+  if (drag && drag.mode === 'marquee') {
+    const b = marqueeBox(drag);
+    el('rect', { x: b.x, y: b.y, width: b.w, height: b.h, class: 'wm-marquee', 'stroke-width': 1.5 * s }, chrome);
+    return;
   }
 
   if (drag && drag.mode === 'connect') {
-    const a = { x: drag.from.x + drag.from.w / 2, y: drag.from.y + drag.from.h / 2 };
-    el('path', { d: `M${a.x} ${a.y}L${drag.cur.x} ${drag.cur.y}`, class: 'wm-rubber', 'stroke-width': 1.5 * s }, chrome);
+    el('path', {
+      d: `M${drag.origin.x} ${drag.origin.y}L${drag.cur.x} ${drag.cur.y}`,
+      class: 'wm-rubber', 'stroke-width': 1.5 * s,
+    }, chrome);
     if (drag.over && drag.over !== drag.from) {
       el('rect', {
         x: drag.over.x - 3 * s, y: drag.over.y - 3 * s, width: drag.over.w + 6 * s, height: drag.over.h + 6 * s,
         class: 'wm-droptarget', 'stroke-width': 2.5 * s,
       }, chrome);
+      // Show the target's ports mid-drag so there is something to aim at.
+      portNode = drag.over;
+    } else {
+      portNode = null;
     }
-    return; // no ports or handles while wiring
   }
 
-  const only = sel.size === 1 ? nodeById(model, [...sel][0]) : null;
-  const portNode = hoverNode || only;
   if (portNode) {
-    const mid = { x: portNode.x + portNode.w / 2, y: portNode.y + portNode.h / 2 };
-    const spots = [
-      { x: mid.x, y: portNode.y }, { x: portNode.x + portNode.w, y: mid.y },
-      { x: mid.x, y: portNode.y + portNode.h }, { x: portNode.x, y: mid.y },
-    ];
-    for (const p of spots) {
-      // An invisible disc well larger than the dot does the catching -- a 6px
+    for (const p of portSpots(portNode)) {
+      // An invisible disc well larger than the dot does the catching -- a 5px
       // target is far too fiddly to hit, especially zoomed out.
       el('circle', {
-        cx: p.x, cy: p.y, r: 15 * s, fill: 'transparent', stroke: 'none',
+        cx: p.x, cy: p.y, r: 13 * s, fill: 'transparent', stroke: 'none',
         style: 'cursor:crosshair', 'data-role': 'port', 'data-for': portNode.id,
+        'data-side': p.side, 'data-t': p.t.toFixed(4),
       }, chrome);
       el('circle', {
-        cx: p.x, cy: p.y, r: 6 * s, class: 'wm-port', 'stroke-width': 2 * s,
+        cx: p.x, cy: p.y, r: 5 * s, class: 'wm-port', 'stroke-width': 2 * s,
         style: 'pointer-events:none',
       }, chrome);
     }
   }
-  if (only) {
+
+  if (only && !drag) {
     const corners = [
       ['nw', only.x, only.y], ['ne', only.x + only.w, only.y],
       ['se', only.x + only.w, only.y + only.h], ['sw', only.x, only.y + only.h],
@@ -206,11 +244,15 @@ function nodeAt(p, margin) {
   return null;
 }
 
-// Only the title strip grabs a group -- its body must stay click-through so
-// you can still select the nodes inside it.
-function groupTitleAt(p) {
+// A group is grabbed by its title tab or by its border band. Its interior must
+// stay click-through so you can still select the blocks inside it.
+function groupAt(p) {
   for (const g of model.groups) {
-    if (g.w > 0 && p.x >= g.x && p.x <= g.x + g.w && p.y >= g.y && p.y <= g.y + 22) return g;
+    if (!g.w) continue;
+    if (p.x < g.x || p.x > g.x + g.w || p.y < g.y || p.y > g.y + g.h) continue;
+    if (p.y <= g.y + GROUP_TITLE_H) return g;
+    const m = 8;
+    if (p.x <= g.x + m || p.x >= g.x + g.w - m || p.y >= g.y + g.h - m) return g;
   }
   return null;
 }
@@ -225,14 +267,20 @@ function distToSeg(p, a, b) {
 }
 
 function edgeAt(p) {
-  for (let i = model.edges.length - 1; i >= 0; i--) {
-    const a = nodeById(model, model.edges[i].from);
-    const b = nodeById(model, model.edges[i].to);
-    if (!a || !b) continue;
-    const pts = routePoints(a, b);
-    for (let j = 1; j < pts.length; j++) if (distToSeg(p, pts[j - 1], pts[j]) < 6) return i;
+  const geom = edgeGeometry(model);
+  for (let i = geom.length - 1; i >= 0; i--) {
+    const pts = geom[i];
+    if (!pts) continue;
+    for (let j = 1; j < pts.length; j++) if (distToSeg(p, pts[j - 1], pts[j]) < 7) return i;
   }
   return -1;
+}
+
+function marqueeBox(d) {
+  return {
+    x: Math.min(d.start.x, d.cur.x), y: Math.min(d.start.y, d.cur.y),
+    w: Math.abs(d.cur.x - d.start.x), h: Math.abs(d.cur.y - d.start.y),
+  };
 }
 
 // --- model edits --------------------------------------------------------
@@ -262,7 +310,8 @@ function takenIds() {
 // creates a node and an edge as one undoable step.
 function makeNode(shape, x, y) {
   const label = shape === 'text' ? 'Text' : 'Block';
-  const n = { id: makeId(label, takenIds()), label, shape, x: snap(x), y: snap(y), w: 140, h: 56, fill: '#ffffff' };
+  const n = { id: makeId(label, takenIds()), label, shape, x: snap(x), y: snap(y),
+              w: 140, h: 56, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE };
   fitNodeSize(n);
   model.nodes.push(n);
   return n;
@@ -277,6 +326,7 @@ function addNode(shape, x, y) {
   // Open for naming straight away -- a block called "Block" is never what you
   // wanted, and this saves a separate double-click every single time.
   beginLabelEdit(n);
+  return n;
 }
 
 function deleteSelection() {
@@ -293,27 +343,46 @@ function deleteSelection() {
   commit();
 }
 
+// Every selected block, plus the members of every selected group.
+function selectedNodes() {
+  const ids = new Set();
+  for (const id of sel) {
+    if (nodeById(model, id)) ids.add(id);
+    const g = model.groups.find((gr) => gr.id === id);
+    if (g) g.members.forEach((m) => ids.add(m));
+  }
+  return [...ids].map((id) => nodeById(model, id)).filter(Boolean);
+}
+
 function groupSelection() {
-  const ids = [...sel].filter((id) => nodeById(model, id));
-  if (!ids.length) return 'select one or more blocks to group';
+  const ids = selectedNodes().map((n) => n.id);
+  if (!ids.length) return 'select blocks first -- shift-click them, or shift-drag a box around them';
   pushUndo();
   for (const g of model.groups) g.members = g.members.filter((m) => !ids.includes(m));
-  model.groups.push({ id: makeId('Group', takenIds()), label: 'Group', members: ids, x: 0, y: 0, w: 0, h: 0 });
+  const g = { id: makeId('Group', takenIds()), label: 'Group', members: ids, x: 0, y: 0, w: 0, h: 0 };
+  model.groups.push(g);
+  // Select the new boundary and open its name for editing: otherwise grouping
+  // looks like it did nothing, because the blocks stay selected underneath.
+  sel = new Set([g.id]);
+  selEdge = -1;
   commit();
+  beginLabelEdit(g);
   return null;
 }
 
 function ungroupSelection() {
-  const hit = model.groups.filter((g) => sel.has(g.id));
-  if (!hit.length) return 'select a group boundary (click its title) first';
+  // Works whether you picked the boundary or a block inside it -- hunting for
+  // the title tab just to undo a grouping is busywork.
+  const hit = model.groups.filter((g) => sel.has(g.id) || g.members.some((m) => sel.has(m)));
+  if (!hit.length) return 'select a group boundary, or a block inside one';
   pushUndo();
-  model.groups = model.groups.filter((g) => !sel.has(g.id));
+  model.groups = model.groups.filter((g) => !hit.includes(g));
   commit();
   return null;
 }
 
 function applyToNodes(fn) {
-  const nodes = [...sel].map((id) => nodeById(model, id)).filter(Boolean);
+  const nodes = selectedNodes();
   if (!nodes.length) return;
   pushUndo();
   nodes.forEach(fn);
@@ -327,6 +396,77 @@ function applyToEdge(fn) {
   commit();
 }
 
+function reorderSelection(toFront) {
+  const nodes = selectedNodes();
+  if (!nodes.length) return;
+  pushUndo();
+  const rest = model.nodes.filter((n) => !nodes.includes(n));
+  model.nodes = toFront ? rest.concat(nodes) : nodes.concat(rest);
+  commit();
+}
+
+function selectAll() {
+  sel = new Set(model.nodes.map((n) => n.id));
+  selEdge = -1;
+  render();
+  notify();
+}
+
+// --- clipboard ----------------------------------------------------------
+//
+// Internal, not the system clipboard: navigator.clipboard is blocked inside
+// Word's task pane iframe, and pasting a picture of a block would be useless
+// anyway. Edges come along only when both of their ends do.
+
+function copySelection() {
+  const nodes = selectedNodes();
+  if (!nodes.length) return false;
+  const ids = new Set(nodes.map((n) => n.id));
+  clipboard = JSON.parse(JSON.stringify({
+    nodes,
+    edges: model.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
+  }));
+  return true;
+}
+
+function hasClipboard() { return !!(clipboard && clipboard.nodes.length); }
+
+function pasteClipboard(dx, dy) {
+  if (!hasClipboard()) return false;
+  pushUndo();
+  const taken = takenIds();
+  const remap = {};
+  const made = [];
+  for (const source of clipboard.nodes) {
+    const n = JSON.parse(JSON.stringify(source));
+    n.id = makeId(n.label, taken);
+    taken.add(n.id);
+    remap[source.id] = n.id;
+    n.x = snap(n.x + dx);
+    n.y = snap(n.y + dy);
+    model.nodes.push(n);
+    made.push(n.id);
+  }
+  for (const e of clipboard.edges) {
+    const copy = JSON.parse(JSON.stringify(e));
+    copy.from = remap[e.from];
+    copy.to = remap[e.to];
+    model.edges.push(copy);
+  }
+  sel = new Set(made);
+  selEdge = -1;
+  commit();
+  return true;
+}
+
+// Drops the copy where the pointer is rather than at a fixed offset, which is
+// what "paste here" from the right-click menu has to mean.
+function pasteAt(p) {
+  if (!hasClipboard()) return false;
+  const x0 = Math.min(...clipboard.nodes.map((n) => n.x));
+  const y0 = Math.min(...clipboard.nodes.map((n) => n.y));
+  return pasteClipboard(p.x - x0, p.y - y0);
+}
 
 function undo() {
   if (!undoStack.length) return;
@@ -350,16 +490,6 @@ function redo() {
 
 // --- pointer ------------------------------------------------------------
 
-function movingNodes() {
-  const ids = new Set();
-  for (const id of sel) {
-    if (nodeById(model, id)) ids.add(id);
-    const g = model.groups.find((gr) => gr.id === id);
-    if (g) g.members.forEach((m) => ids.add(m));
-  }
-  return [...ids].map((id) => nodeById(model, id)).filter(Boolean);
-}
-
 function onPointerDown(ev) {
   if (ev.button === 1) {
     drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
@@ -372,7 +502,9 @@ function onPointerDown(ev) {
   const p = toModel(ev);
 
   if (role === 'port') {
-    drag = { mode: 'connect', from: nodeById(model, ev.target.getAttribute('data-for')), cur: p, over: null };
+    const from = nodeById(model, ev.target.getAttribute('data-for'));
+    const anchor = { side: ev.target.getAttribute('data-side'), t: +ev.target.getAttribute('data-t') };
+    drag = { mode: 'connect', from, anchor, origin: anchorPoint(from, anchor.side, anchor.t), cur: p, over: null };
     render();
     return;
   }
@@ -393,17 +525,17 @@ function onPointerDown(ev) {
     if (ev.shiftKey) { sel.has(n.id) ? sel.delete(n.id) : sel.add(n.id); }
     else if (!sel.has(n.id)) sel = new Set([n.id]);
     selEdge = -1;
-    drag = { mode: 'move', start: p, boxes: movingNodes().map((m) => ({ n: m, x: m.x, y: m.y })) };
+    drag = { mode: 'move', start: p, boxes: selectedNodes().map((m) => ({ n: m, x: m.x, y: m.y })) };
     render();
     notify();
     return;
   }
 
-  const g = groupTitleAt(p);
+  const g = groupAt(p);
   if (g) {
     sel = ev.shiftKey ? new Set([...sel, g.id]) : new Set([g.id]);
     selEdge = -1;
-    drag = { mode: 'move', start: p, boxes: movingNodes().map((m) => ({ n: m, x: m.x, y: m.y })) };
+    drag = { mode: 'move', start: p, boxes: selectedNodes().map((m) => ({ n: m, x: m.x, y: m.y })) };
     render();
     notify();
     return;
@@ -418,10 +550,16 @@ function onPointerDown(ev) {
     return;
   }
 
-  // Dragging empty canvas pans. Multi-select is shift-click rather than a
-  // rubber band -- one less mode, and dragging the background to move around
-  // is what people reach for first.
-  if (!ev.shiftKey) { sel = new Set(); selEdge = -1; }
+  // Shift-drag on empty canvas draws a selection box; a plain drag pans. Pan
+  // is the unmodified gesture because moving around is what people reach for
+  // first, and grouping needs the box only occasionally.
+  if (ev.shiftKey) {
+    drag = { mode: 'marquee', start: p, cur: p, base: new Set(sel) };
+    render();
+    return;
+  }
+  sel = new Set();
+  selEdge = -1;
   drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
   svg.style.cursor = 'grabbing';
   render();
@@ -457,6 +595,16 @@ function onPointerMove(ev) {
     viewTouched = true;
     render();
     onView();
+    return;
+  }
+  if (drag.mode === 'marquee') {
+    drag.cur = p;
+    const b = marqueeBox(drag);
+    sel = new Set(drag.base);
+    for (const n of model.nodes) {
+      if (n.x < b.x + b.w && n.x + n.w > b.x && n.y < b.y + b.h && n.y + n.h > b.y) sel.add(n.id);
+    }
+    render();
     return;
   }
   if (drag.mode === 'connect') {
@@ -505,12 +653,20 @@ function onPointerUp(ev) {
     // wires it up, rather than throwing the gesture away.
     const created = !target;
     if (created) target = makeNode(d.from.shape === 'text' ? 'rect' : d.from.shape, p.x - 70, p.y - 28);
-    model.edges.push({ from: d.from.id, to: target.id, label: '', style: 'arrow' });
+    // The landing port is pinned only if you actually aimed at one; otherwise
+    // the side stays automatic so the connector follows the block around.
+    const landed = created ? null : nearestPort(target, p, 16 / view.zoom);
+    model.edges.push({
+      from: d.from.id, to: target.id, label: '', style: 'arrow', width: DEFAULT_EDGE_W,
+      fromAnchor: { side: d.anchor.side, t: d.anchor.t },
+      toAnchor: landed ? { side: landed.side, t: landed.t } : null,
+    });
     if (created) { sel = new Set([target.id]); selEdge = -1; }
     commit();
     if (created) beginLabelEdit(target);
     return;
   }
+  if (d.mode === 'marquee') { render(); notify(); return; }
   if (d.mode === 'pan') { svg.style.cursor = 'default'; render(); return; }
   if (d.undoPushed) commit(); else render();
 }
@@ -540,26 +696,80 @@ function canvasCenter() {
 function zoomBy(factor) { zoomAround(view.zoom * factor, canvasCenter()); }
 function getZoom() { return view.zoom; }
 
+// Right-click selects whatever is under the pointer first, so the menu the
+// shell builds is always about the thing you aimed at.
+function onContext(ev) {
+  ev.preventDefault();
+  const p = toModel(ev);
+  menuPoint = p;
+  const n = nodeAt(p, 6 / view.zoom);
+  if (n) {
+    if (!sel.has(n.id)) { sel = new Set([n.id]); }
+    selEdge = -1;
+  } else {
+    const g = groupAt(p);
+    const ei = g ? -1 : edgeAt(p);
+    if (g) { sel = new Set([g.id]); selEdge = -1; }
+    else if (ei >= 0) { sel = new Set(); selEdge = ei; }
+    else { sel = new Set(); selEdge = -1; }
+  }
+  render();
+  notify();
+  onMenu(ev.clientX, ev.clientY);
+}
+
+function lastMenuPoint() { return menuPoint; }
+
 function onDoubleClick(ev) {
   const p = toModel(ev);
-  const target = nodeAt(p) || groupTitleAt(p);
-  if (target) beginLabelEdit(target);
+  const n = nodeAt(p, 6 / view.zoom);
+  if (n) { beginLabelEdit(n); return; }
+  const g = groupAt(p);
+  if (g) { beginLabelEdit(g); return; }
+  const ei = edgeAt(p);
+  if (ei >= 0) { selEdge = ei; sel = new Set(); render(); editEdgeLabel(ei); return; }
+  // Empty canvas: make a block here and name it. Two clicks from nothing to a
+  // named block is the fastest path there is.
+  addNode('rect', p.x - 70, p.y - 28);
+}
+
+// An edge has no box to hang the editor on, so one is synthesised over the
+// spot the label is drawn.
+function editEdgeLabel(index) {
+  const pts = edgeGeometry(model)[index];
+  if (!pts) return;
+  const mid = longestSegmentMidpoint(pts);
+  beginLabelEdit(model.edges[index], undefined, { x: mid.x - 70, y: mid.y - 16, w: 140, h: 32 });
 }
 
 // A textarea rather than an input so labels can wrap onto two lines, which
 // block diagrams need constantly. Enter commits; Shift+Enter is a line break.
 // `seed` is the character that triggered the edit when you just start typing
-// over a selected block.
-function beginLabelEdit(item, seed) {
-  if (host.querySelector('.wm-label-input')) return;
+// over a selected block. `box` overrides where the editor is placed, for
+// things (edges) that have no box of their own.
+function beginLabelEdit(item, seed, box) {
+  // Commit whatever was already open rather than refusing: double-clicking
+  // straight from one block to the next has to just work.
+  const open = host.querySelector('.wm-label-input');
+  if (open) open.blur();
+
+  const b = box || item;
+  const size = (item.fontSize || DEFAULT_FONT_SIZE) * view.zoom;
+  const lh = lineH(item.fontSize) * view.zoom;
+  const boxH = Math.max(30, (b.h || 32) * view.zoom);
+  const rows = Math.max(1, String(item.label || '').split('\n').length);
+
   const input = document.createElement('textarea');
   input.className = 'wm-label-input';
   input.value = seed != null ? seed : item.label;
-  input.style.left = (view.x + item.x * view.zoom) + 'px';
-  input.style.top = (view.y + item.y * view.zoom) + 'px';
-  input.style.width = Math.max(90, item.w * view.zoom) + 'px';
-  input.style.height = Math.max(32, (item.h || 26) * view.zoom) + 'px';
-  input.style.fontSize = Math.max(11, 13 * view.zoom) + 'px';
+  input.style.left = (view.x + b.x * view.zoom) + 'px';
+  input.style.top = (view.y + b.y * view.zoom) + 'px';
+  input.style.width = Math.max(90, b.w * view.zoom) + 'px';
+  input.style.height = boxH + 'px';
+  input.style.fontSize = Math.max(11, size) + 'px';
+  // Textareas top-align their text; pad it down so the text sits where it will
+  // sit once committed instead of jumping when the editor closes.
+  input.style.paddingTop = Math.max(2, (boxH - rows * lh) / 2) + 'px';
   host.appendChild(input);
   input.focus();
   if (seed != null) input.setSelectionRange(input.value.length, input.value.length);
@@ -586,6 +796,11 @@ function beginLabelEdit(item, seed) {
 }
 
 function editSelectedLabel(seed) {
+  if (selEdge >= 0 && model.edges[selEdge]) {
+    if (seed != null) return false;   // typing over an edge would be a surprise
+    editEdgeLabel(selEdge);
+    return true;
+  }
   if (sel.size !== 1) return false;
   const item = nodeById(model, [...sel][0]) || model.groups.find((g) => sel.has(g.id));
   if (!item) return false;
@@ -597,24 +812,33 @@ function editSelectedLabel(seed) {
 // stopped from propagating.
 function onKeyDown(ev) {
   const tag = (document.activeElement && document.activeElement.tagName) || '';
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   const ctrl = ev.ctrlKey || ev.metaKey;
+  const k = ev.key.toLowerCase();
+  const eat = () => { ev.preventDefault(); ev.stopPropagation(); };
 
   if (ev.key === 'Enter' || ev.key === 'F2') {
-    if (editSelectedLabel()) { ev.preventDefault(); ev.stopPropagation(); }
-  } else if (!ctrl && !ev.altKey && ev.key.length === 1 && ev.key !== ' ') {
+    if (editSelectedLabel()) eat();
+  } else if (ctrl && k === 'c') { eat(); copySelection(); }
+  else if (ctrl && k === 'x') { eat(); if (copySelection()) deleteSelection(); }
+  else if (ctrl && k === 'v') { eat(); pasteClipboard(20, 20); }
+  else if (ctrl && k === 'd') { eat(); if (copySelection()) pasteClipboard(20, 20); }
+  else if (ctrl && k === 'a') { eat(); selectAll(); }
+  else if (ctrl && k === 'g') { eat(); ev.shiftKey ? ungroupSelection() : groupSelection(); }
+  else if (ctrl && k === 'z') { eat(); ev.shiftKey ? redo() : undo(); }
+  else if (ctrl && k === 'y') { eat(); redo(); }
+  else if (!ctrl && !ev.altKey && ev.key.length === 1 && ev.key !== ' ') {
     // Typing over a selected block replaces its text, the way it works in
     // every other diagram tool.
-    if (editSelectedLabel(ev.key)) { ev.preventDefault(); ev.stopPropagation(); }
+    if (editSelectedLabel(ev.key)) eat();
   } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
-    ev.preventDefault(); ev.stopPropagation();
+    eat();
     deleteSelection();
-  } else if (ctrl && ev.key.toLowerCase() === 'z') {
-    ev.preventDefault(); ev.stopPropagation();
-    ev.shiftKey ? redo() : undo();
-  } else if (ctrl && ev.key.toLowerCase() === 'y') {
-    ev.preventDefault(); ev.stopPropagation();
-    redo();
+  } else if (ev.key.startsWith('Arrow') && (sel.size || selEdge >= 0)) {
+    const step = ev.shiftKey ? 1 : GRID;
+    const dx = (ev.key === 'ArrowRight' ? step : 0) - (ev.key === 'ArrowLeft' ? step : 0);
+    const dy = (ev.key === 'ArrowDown' ? step : 0) - (ev.key === 'ArrowUp' ? step : 0);
+    if (dx || dy) { eat(); applyToNodes((n) => { n.x += dx; n.y += dy; }); }
   } else if (ev.key === 'Escape') {
     sel = new Set(); selEdge = -1; armedShape = null;
     render(); notify();
@@ -640,6 +864,9 @@ function selectionInfo() {
   return {
     nodes: [...sel].map((id) => nodeById(model, id)).filter(Boolean),
     groups: model.groups.filter((g) => sel.has(g.id)),
+    // A block inside a group can be ungrouped too, so the shell needs to know
+    // the selection touches one even when the boundary itself isn't selected.
+    inGroup: model.groups.some((g) => g.members.some((m) => sel.has(m))),
     edge: selEdge >= 0 ? model.edges[selEdge] : null,
   };
 }
