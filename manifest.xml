@@ -16,7 +16,7 @@
     <Host Name="Document" />
   </Hosts>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://tigerbitten.github.io/word-mermaid-tool/taskpane.html?v=5" />
+    <SourceLocation DefaultValue="https://tigerbitten.github.io/word-mermaid-tool/taskpane.html?v=6" />
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
 </OfficeApp>

@@ -333,7 +333,9 @@ function deleteSelection() {
   if (!sel.size && selEdge < 0) return;
   pushUndo();
   if (selEdge >= 0) model.edges.splice(selEdge, 1);
-  const gone = new Set([...sel].filter((id) => nodeById(model, id)));
+  // Deleting a group boundary takes its blocks with it -- Ungroup is the one
+  // that keeps them, and having both do the same thing would be a trap.
+  const gone = new Set(selectedNodes().map((n) => n.id));
   model.nodes = model.nodes.filter((n) => !gone.has(n.id));
   model.edges = model.edges.filter((e) => !gone.has(e.from) && !gone.has(e.to));
   model.groups = model.groups.filter((g) => !sel.has(g.id));
@@ -503,6 +505,7 @@ function onPointerDown(ev) {
 
   if (role === 'port') {
     const from = nodeById(model, ev.target.getAttribute('data-for'));
+    if (!from) return;            // chrome outlived the block it belonged to
     const anchor = { side: ev.target.getAttribute('data-side'), t: +ev.target.getAttribute('data-t') };
     drag = { mode: 'connect', from, anchor, origin: anchorPoint(from, anchor.side, anchor.t), cur: p, over: null };
     render();
@@ -510,6 +513,7 @@ function onPointerDown(ev) {
   }
   if (role && role.startsWith('handle-')) {
     const n = nodeById(model, ev.target.getAttribute('data-for'));
+    if (!n) return;               // chrome outlived the block it belonged to
     drag = { mode: 'resize', node: n, corner: role.slice(7), start: p, box: { ...n } };
     return;
   }
@@ -702,6 +706,7 @@ function onContext(ev) {
   ev.preventDefault();
   const p = toModel(ev);
   menuPoint = p;
+  armedShape = null;
   const n = nodeAt(p, 6 / view.zoom);
   if (n) {
     if (!sel.has(n.id)) { sel = new Set([n.id]); }
@@ -749,9 +754,11 @@ function editEdgeLabel(index) {
 // things (edges) that have no box of their own.
 function beginLabelEdit(item, seed, box) {
   // Commit whatever was already open rather than refusing: double-clicking
-  // straight from one block to the next has to just work.
+  // straight from one block to the next has to just work. blur() only fires if
+  // it still had focus, so remove it outright afterwards -- a stranded overlay
+  // sitting over the canvas is the worst outcome here.
   const open = host.querySelector('.wm-label-input');
-  if (open) open.blur();
+  if (open) { open.blur(); open.remove(); }
 
   const b = box || item;
   const size = (item.fontSize || DEFAULT_FONT_SIZE) * view.zoom;
@@ -813,6 +820,7 @@ function editSelectedLabel(seed) {
 function onKeyDown(ev) {
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (!ev.key) return;            // IME composition and some synthetic events
   const ctrl = ev.ctrlKey || ev.metaKey;
   const k = ev.key.toLowerCase();
   const eat = () => { ev.preventDefault(); ev.stopPropagation(); };
@@ -834,7 +842,7 @@ function onKeyDown(ev) {
   } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
     eat();
     deleteSelection();
-  } else if (ev.key.startsWith('Arrow') && (sel.size || selEdge >= 0)) {
+  } else if (ev.key.startsWith('Arrow') && sel.size) {
     const step = ev.shiftKey ? 1 : GRID;
     const dx = (ev.key === 'ArrowRight' ? step : 0) - (ev.key === 'ArrowLeft' ? step : 0);
     const dy = (ev.key === 'ArrowDown' ? step : 0) - (ev.key === 'ArrowUp' ? step : 0);

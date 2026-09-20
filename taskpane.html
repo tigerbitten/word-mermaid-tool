@@ -61,7 +61,9 @@
   /* The right-click menu. Same controls as the inspector, at the pointer. */
   #menu { position: fixed; z-index: 30; background: #fff; border: 1px solid #c4c4c4;
     border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.20); padding: 0.25rem;
-    min-width: 12.5rem; max-width: 18rem; }
+    min-width: 12.5rem; max-width: 18rem;
+    /* The pane can be shorter than the block menu is tall. */
+    max-height: calc(100vh - 1rem); overflow-y: auto; }
   #menu.hidden { display: none; }
   #menu .item { display: flex; width: 100%; align-items: center; justify-content: space-between;
     gap: 0.6rem; text-align: left; border: none; background: none; padding: 0.4rem 0.55rem;
@@ -97,7 +99,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v5</span>
+    <span class="build">build v6</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -132,14 +134,10 @@
     <button id="loadBtn">Open selected</button>
   </div>
 
-<script src="diagram.js?v=5"></script>
-<script src="render.js?v=5"></script>
-<script src="editor.js?v=5"></script>
+<script src="diagram.js?v=6"></script>
+<script src="render.js?v=6"></script>
+<script src="editor.js?v=6"></script>
 <script>
-  const RASTER_SCALE = 3;          // ~288dpi, so the inserted PNG stays sharp in print
-  const PX_TO_PT = 0.75;           // 1 CSS px = 1/96in, 1pt = 1/72in
-  const MAX_DOC_WIDTH_PT = 468;    // 6.5in: US Letter minus one-inch margins
-
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
   document.documentElement.style.fontSize =
@@ -286,23 +284,22 @@
     }
   }
 
-  // The box is re-derived from the label at the new size, otherwise shrinking
-  // the text just leaves a box full of air.
-  function setFontSize(nodes, size) {
-    const v = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
-    applyToNodes((n) => { n.fontSize = v; fitNodeSize(n, true); });
-  }
-
   function fontStepper(nodes) {
     const wrap = document.createElement('span');
     wrap.className = 'stepper';
-    const current = nodes[0].fontSize || DEFAULT_FONT_SIZE;
     const val = document.createElement('span');
     val.className = 'val';
-    val.textContent = current;
+    val.textContent = nodes[0].fontSize || DEFAULT_FONT_SIZE;
+    // The size is read at click time, not captured when the control is built:
+    // the right-click menu stays open across clicks, so a captured value would
+    // make every press after the first jump back to where it started. The box
+    // is re-derived at the new size too, or shrinking the text leaves a box
+    // full of air.
     const step = (delta) => {
-      setFontSize(nodes, current + delta);
-      val.textContent = Math.max(FONT_MIN, Math.min(FONT_MAX, current + delta));
+      const next = Math.max(FONT_MIN,
+        Math.min(FONT_MAX, (nodes[0].fontSize || DEFAULT_FONT_SIZE) + delta));
+      applyToNodes((n) => { n.fontSize = next; fitNodeSize(n, true); });
+      val.textContent = next;
     };
     wrap.appendChild(button('−', () => step(-2)));
     wrap.appendChild(val);
@@ -365,7 +362,7 @@
       add(hint('Group "' + info.groups[0].label + '"'));
       add(button('Rename', () => editSelectedLabel()));
       add(button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped')));
-      add(button('Delete', deleteSelection));
+      add(button('Delete all', deleteSelection));
       return;
     }
     add(hint('Drag a shape in, or double-click the canvas. Double-click a block to rename it. ' +
@@ -470,43 +467,13 @@
 
   // --- Word ------------------------------------------------------------
 
-  async function rasterize() {
-    const { svg, width, height } = buildExportSvg(getModel());
-    const text = new XMLSerializer().serializeToString(svg);
-    // btoa throws on non-Latin1, and labels are arbitrary UTF-8.
-    const dataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(text)));
-
-    const img = new Image();
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = () => reject(new Error('the SVG failed to decode'));
-      img.src = dataUrl;
-    });
-
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.ceil(width * RASTER_SCALE);
-    canvas.height = Math.ceil(height * RASTER_SCALE);
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-    // The PNG is 3x oversampled for sharpness, so the picture has to be sized
-    // explicitly or Word would place it at three times its intended size. Wide
-    // diagrams are scaled down to the text column instead of overflowing it.
-    let w = width * PX_TO_PT;
-    let h = height * PX_TO_PT;
-    if (w > MAX_DOC_WIDTH_PT) { h *= MAX_DOC_WIDTH_PT / w; w = MAX_DOC_WIDTH_PT; }
-    return { base64: canvas.toDataURL('image/png').split(',')[1], widthPt: w, heightPt: h };
-  }
-
   async function insertOrReplace(mode) {
     await withButtonsDisabled(async () => {
       const d = getModel();
       if (!d.nodes.length) { setStatus('nothing to insert -- add a block first', 'error'); return; }
 
       let png;
-      try { png = await rasterize(); }
+      try { png = await renderPng(d); }
       catch (e) { setStatus('rasterize failed: ' + describeError(e), 'error'); return; }
 
       try {
@@ -533,6 +500,9 @@
           }
 
           pic.altTextDescription = toAltText(d);
+          // The PNG already declares its DPI, so Word lays it out at this size
+          // on its own. Setting it explicitly as well costs nothing and covers
+          // a host that ignores the metadata.
           pic.width = png.widthPt;
           pic.height = png.heightPt;
           await context.sync();

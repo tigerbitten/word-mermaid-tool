@@ -306,27 +306,33 @@ function parseMermaid(text) {
     const header = line.match(/^(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)\s*$/i);
     if (header) { d.direction = header[1].toUpperCase() === 'TB' ? 'TD' : header[1].toUpperCase(); continue; }
 
-    const sub = line.match(/^subgraph\s+([A-Za-z0-9_-]+)\s*(?:\[(.*)\])?\s*$/);
-    if (sub) {
-      const g = { id: sub[1], label: sub[2] ? unquoteLabel(sub[2]) : sub[1],
-                  members: [], x: 0, y: 0, w: 0, h: 0 };
+    // Anything starting with `subgraph` opens a group, even the id-less
+    // `subgraph "Name"` form an LLM sometimes writes -- falling through would
+    // parse the keyword itself as a block called "subgraph".
+    if (/^subgraph\b/.test(line)) {
+      const sub = line.match(/^subgraph\s+([A-Za-z0-9_-]+)\s*(?:\[(.*)\])?\s*$/);
+      const label = sub ? (sub[2] ? unquoteLabel(sub[2]) : sub[1]) : unquoteLabel(line.slice(9).trim());
+      const id = sub ? sub[1] : makeId(label, new Set(d.groups.map((g) => g.id)));
+      const g = { id, label, members: [], x: 0, y: 0, w: 0, h: 0 };
       d.groups.push(g);
       groupStack.push(g);
       continue;
     }
-    if (line === 'end') { groupStack.pop(); continue; }
+    if (/^end$/i.test(line)) { groupStack.pop(); continue; }
 
     const style = line.match(/^style\s+([A-Za-z0-9_-]+)\s+(.*)$/);
     if (style) { styles[style[1]] = style[2]; continue; }
 
-    const linkStyle = line.match(/^linkStyle\s+([\d,\s]+?)\s+(.*)$/);
-    if (linkStyle) {
-      const w = linkStyle[2].match(/stroke-width:\s*([\d.]+)/);
+    // Consumed whatever it says, including `linkStyle default ...`, which
+    // carries no width we can use but must not be read as a block.
+    if (/^linkStyle\b/.test(line)) {
+      const linkStyle = line.match(/^linkStyle\s+([\d,\s]+?)\s+(.*)$/);
+      const w = linkStyle && linkStyle[2].match(/stroke-width:\s*([\d.]+)/);
       if (w) linkStyle[1].split(',').forEach((i) => { widths[+i.trim()] = +w[1]; });
       continue;
     }
 
-    if (/^(direction|classDef|class|click)\b/.test(line)) continue;
+    if (/^(direction|classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
 
     // Anything left is a node declaration or a chain of edges.
     const s = normalizeInlineLabels(line);
