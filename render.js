@@ -223,6 +223,7 @@ function shapeElement(n) {
     case 'bar':
       return [el('rect', { x, y, width: w, height: h, rx: Math.min(2, w / 2), class: 'wm-shape wm-solid' })];
     case 'text':
+    case 'point':
       return [];
     default:
       return [el('rect', { x, y, width: w, height: h, class: 'wm-shape' })];
@@ -303,12 +304,42 @@ function outlinePoint(n, toward) {
   return { x: c.x + dx * t, y: c.y + dy * t };
 }
 
-// `t` runs 0..1 along the side, left-to-right or top-to-bottom.
+// `t` runs 0..1 along the side, left-to-right or top-to-bottom. The point is
+// on the shape's real outline: for a circle or a diamond the spot on the
+// bounding box is pushed straight in until it meets the curve or the slope, so
+// a line attached anywhere along the side still touches the shape.
 function anchorPoint(n, side, t) {
-  if (side === 'n') return { x: n.x + n.w * t, y: n.y };
-  if (side === 's') return { x: n.x + n.w * t, y: n.y + n.h };
-  if (side === 'w') return { x: n.x, y: n.y + n.h * t };
-  return { x: n.x + n.w, y: n.y + n.h * t };
+  const x = side === 'n' || side === 's' ? n.x + n.w * t : side === 'w' ? n.x : n.x + n.w;
+  const y = side === 'e' || side === 'w' ? n.y + n.h * t : side === 'n' ? n.y : n.y + n.h;
+  const round = ['circle', 'doublecircle', 'junction', 'sum'].includes(n.shape);
+  if ((!round && n.shape !== 'diamond') || !n.w || !n.h) return { x, y };
+  const c = centerOf(n);
+  const rx = n.w / 2;
+  const ry = n.h / 2;
+  // How far out from the centre the outline is, as a fraction of the half
+  // size, at this offset along the side.
+  const reach = (off) => round ? Math.sqrt(Math.max(0, 1 - off * off)) : Math.max(0, 1 - Math.abs(off));
+  if (side === 'n' || side === 's') {
+    const k = reach((x - c.x) / rx);
+    return { x, y: c.y + (side === 'n' ? -1 : 1) * ry * k };
+  }
+  const k = reach((y - c.y) / ry);
+  return { x: c.x + (side === 'w' ? -1 : 1) * rx * k, y };
+}
+
+// The spot on `n`'s outline nearest to `p`, as the side and position an edge
+// end stores, plus how far away it is. This is what lets a line attach at any
+// point along any edge rather than only at fixed ports.
+function nearestOnOutline(n, p) {
+  let best = null;
+  for (const side of ['n', 'e', 's', 'w']) {
+    const along = side === 'n' || side === 's' ? (p.x - n.x) / n.w : (p.y - n.y) / n.h;
+    const t = Math.max(0.02, Math.min(0.98, along));
+    const at = anchorPoint(n, side, t);
+    const dist = Math.hypot(p.x - at.x, p.y - at.y);
+    if (!best || dist < best.dist) best = { side, t, at, dist };
+  }
+  return best;
 }
 
 // Drops duplicate points and any interior point sitting on the line between its
@@ -389,9 +420,10 @@ function edgeRoutes(d) {
     const b = nodeById(d, e.to);
     if (!a || !b) return null;
     if (a === b) return { a, self: true };
-    // A straight connector runs centre to centre, cut off at each outline. It
-    // takes no port and joins no fan-out, so it skips everything below.
-    if (e.route === 'straight') return { a, b, straight: true };
+    // A straight connector runs between the exact points its ends were
+    // attached at, or, for an end left floating, towards the other end and cut
+    // off at the outline. It joins no fan-out, so it skips everything below.
+    if (e.route === 'straight') return { a, b, straight: true, fa: e.fromAnchor, ta: e.toAnchor };
     const fa = e.fromAnchor || {};
     const ta = e.toAnchor || {};
     return {
@@ -442,7 +474,12 @@ function edgeRoutes(d) {
     if (!s) return null;
     if (s.self) return { self: true, raw: selfLoopPoints(s.a) };
     if (s.straight) {
-      return { straight: true, raw: [outlinePoint(s.a, centerOf(s.b)), outlinePoint(s.b, centerOf(s.a))] };
+      const pinned = (n, an) => an && an.t != null ? anchorPoint(n, an.side, an.t) : null;
+      let p0 = pinned(s.a, s.fa);
+      let p1 = pinned(s.b, s.ta);
+      if (!p0) p0 = outlinePoint(s.a, p1 || centerOf(s.b));
+      if (!p1) p1 = outlinePoint(s.b, p0);
+      return { straight: true, raw: [p0, p1] };
     }
     const p0 = anchorPoint(s.a, s.from.side, s.from.t);
     const p1 = anchorPoint(s.b, s.to.side, s.to.t);

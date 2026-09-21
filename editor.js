@@ -11,6 +11,8 @@ const MIN_WIRE = 8;       // wiring symbols (junction, bar) may be much smaller 
 const UNDO_DEPTH = 50;
 const PORT_OUT = 12;      // screen px between a block's border and its connection dots
 const QUICK_GAP = 80;     // gap left by click-a-dot quick create
+const LINE_LEN = 160;     // a line dropped from the palette
+const ATTACH_NEAR = 14;   // screen px from a block's edge within which an end attaches at that exact spot
 
 const EDITOR_STYLE = `
   .wm-canvas { width: 100%; height: 100%; display: block; background: #fff; touch-action: none; }
@@ -21,7 +23,6 @@ const EDITOR_STYLE = `
   .wm-port { fill: #fff; stroke: #2563eb; cursor: crosshair; }
   .wm-handle { fill: #fff; stroke: #2563eb; }
   .wm-endhandle { fill: #2563eb; stroke: #fff; cursor: move; }
-  .wm-rubber { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-marquee { fill: #2563eb; fill-opacity: 0.08; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-droptarget { fill: none; stroke: #16a34a; }
   .wm-seghandle { fill: #fff; stroke: #2563eb; pointer-events: none; }
@@ -30,6 +31,7 @@ const EDITOR_STYLE = `
   .wm-member { fill: #2563eb; fill-opacity: 0.07; stroke: #2563eb; stroke-opacity: 0.55; }
   .wm-ghost { fill: #2563eb; fill-opacity: 0.06; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-guide { fill: none; stroke: #e11d74; }
+  .wm-attach { fill: #16a34a; stroke: #fff; stroke-width: 1.5; pointer-events: none; }
 `;
 
 const PAGE_STYLE = `
@@ -149,7 +151,7 @@ function initEditor(hostEl, onChange, onViewChange, onContextMenu, extra) {
     // WebKit (Word for Mac) drops custom types.
     const payload = ev.dataTransfer.getData('text/plain') || '';
     if (!payload.startsWith('wm-shape:')) { render(); return; }
-    addNode(payload.slice(9), toModel(ev));
+    place(payload.slice(9), toModel(ev));
   });
 
   new ResizeObserver(() => { if (viewTouched) render(); else fitView(); }).observe(host);
@@ -191,14 +193,10 @@ function portSpots(n) {
   return out;
 }
 
-function nearestPort(n, p, maxDist) {
-  let best = null;
-  let bestD = maxDist;
-  for (const s of portSpots(n)) {
-    const dd = Math.hypot(s.x - p.x, s.y - p.y);
-    if (dd < bestD) { bestD = dd; best = s; }
-  }
-  return best;
+
+// A line with both ends loose -- dropped from the palette and not yet attached.
+function freeLine(e) {
+  return isPoint(nodeById(model, e.from)) && isPoint(nodeById(model, e.to));
 }
 
 function groupOf(id) {
@@ -266,26 +264,19 @@ function drawChrome() {
     return;
   }
 
-  const wire = drag && (drag.mode === 'connect' || drag.mode === 'reattach') ? drag : pendingConnect;
-  if (wire) {
-    el('path', {
-      d: `M${wire.origin.x} ${wire.origin.y}L${wire.cur.x} ${wire.cur.y}`,
-      class: 'wm-rubber', 'stroke-width': 1.5 * s,
-    }, chrome);
-    if (wire.over && wire.over !== wire.from) {
-      outline(wire.over, 3 * s, 'wm-droptarget', 2.5 * s);
-      // Show the target's ports mid-drag so there is something to aim at.
-      portNode = wire.over;
-    } else {
-      portNode = null;
-    }
+  // Dragging a line end: the line itself follows the pointer (it is really in
+  // the model), so all that's added is the block it would attach to, and --
+  // when it's close enough to the edge to attach at an exact spot -- that spot.
+  if (drag && drag.mode === 'end') {
+    if (drag.over) outline(drag.over, 3 * s, 'wm-droptarget', 2.5 * s);
+    if (drag.attachAt) el('circle', { cx: drag.attachAt.x, cy: drag.attachAt.y, r: 4.5 * s, class: 'wm-attach' }, chrome);
   }
 
-  // No dots mid-gesture (panning, moving, resizing, marquee) -- only while
-  // wiring, where they are the target. Otherwise the last block the pointer
-  // passed over kept its dots lit while the canvas slid around under it.
-  if (drag && !wire) portNode = null;
-  if (portNode && !pendingConnect) {
+  // No dots mid-gesture (panning, moving, resizing, wiring) or while the shape
+  // picker is open. Otherwise the last block the pointer passed over kept its
+  // dots lit while the canvas slid around under it.
+  if (drag || pendingConnect) portNode = null;
+  if (portNode) {
     for (const p of portSpots(portNode)) {
       // The dots float just outside the border, the way Miro draws them, so
       // grabbing a block near its edge moves it instead of starting a
@@ -334,7 +325,9 @@ function drawEdgeChrome(s) {
   if (!pts) return;
   el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
   if (e.from === e.to) return;
-  if (e.route === 'straight') { drawEndHandles(pts, s); return; }   // a straight line has no legs to drag
+  // A straight line has no legs to drag, and a line attached to nothing is
+  // dragged whole -- neither gets leg grips.
+  if (e.route === 'straight' || freeLine(e)) { drawEndHandles(pts, s); return; }
   // A grip on each leg long enough to grab, so it's obvious the path can be
   // dragged. Purely visual: the press lands on the connector itself. Where the
   // label sits the grip would cover the text, so the grip goes at the leg's
@@ -365,9 +358,10 @@ function drawEdgeChrome(s) {
   drawEndHandles(pts, s);
 }
 
-// The two ends: drag one onto another block to reconnect it, as in Miro.
+// The two ends: drag one onto another block to reconnect it, as in Miro, or
+// into empty space to leave it loose.
 function drawEndHandles(pts, s) {
-  if (drag && drag.mode === 'reattach') return;
+  if (drag && drag.mode === 'end') return;
   for (const [end, p] of [['from', pts[0]], ['to', pts[pts.length - 1]]]) {
     el('circle', {
       cx: p.x, cy: p.y, r: 6 * s, class: 'wm-endhandle', 'stroke-width': 2 * s,
@@ -377,6 +371,11 @@ function drawEndHandles(pts, s) {
 }
 
 function drawGhost(shape, p) {
+  if (shape.startsWith('line:')) {
+    el('path', { d: `M${p.x - LINE_LEN / 2} ${p.y}H${p.x + LINE_LEN / 2}`, class: 'wm-ghost',
+                 'stroke-width': 2 / view.zoom, style: 'pointer-events:none' }, chrome);
+    return;
+  }
   const [w, h] = defaultSize(shape);
   const n = { x: p.x - w / 2, y: p.y - h / 2, w, h, shape };
   for (const part of shapeElement(n)) {
@@ -390,10 +389,13 @@ function drawGhost(shape, p) {
 
 // --- hit testing --------------------------------------------------------
 
+// Loose line ends are nodes in the model but not things you can click: they
+// are picked up through the line's end handles instead.
 function nodeAt(p, margin) {
   const m = margin || 0;
   for (let i = model.nodes.length - 1; i >= 0; i--) {
     const n = model.nodes[i];
+    if (isPoint(n)) continue;
     // Anything smaller than 20px on screen gets its hit area padded out to
     // that, or a 14px junction -- worse, zoomed out -- is next to impossible
     // to click.
@@ -423,7 +425,8 @@ function groupBoxes() {
 // a group stretching to follow a block being dragged out can't keep it.
 // Groups that are moving as a whole are left alone -- moving a group isn't
 // regrouping anything.
-function regroup(nodes, boxes) {
+function regroup(all, boxes) {
+  const nodes = all.filter((n) => !isPoint(n));      // a loose line end belongs to no group
   const ids = new Set(nodes.map((n) => n.id));
   const whole = new Set(model.groups.filter((g) => g.members.every((m) => ids.has(m))));
   for (const n of nodes) {
@@ -518,7 +521,15 @@ function refitGroups() {
   for (const g of model.groups) fitGroup(model, g);
 }
 
+// A loose line end with no line left using it (the line was deleted, or its
+// end was attached to a block instead) is dropped.
+function dropStrayPoints() {
+  const used = new Set(model.edges.flatMap((e) => [e.from, e.to]));
+  model.nodes = model.nodes.filter((n) => !isPoint(n) || used.has(n.id));
+}
+
 function commit() {
+  dropStrayPoints();
   refitGroups();
   // Once you've started editing, the view is yours: the pane resizing (the
   // status line wrapping onto a second line is enough) must not re-fit and
@@ -563,20 +574,44 @@ function addNode(shape, c) {
   return n;
 }
 
+// A free-standing line from the palette, the way Miro's line tool drops one:
+// two loose ends, straight, selected so its ends are ready to drag onto blocks.
+function addLine(kind, c) {
+  pushUndo();
+  const a = makeNode('point', { x: c.x - LINE_LEN / 2, y: c.y });
+  const b = makeNode('point', { x: c.x + LINE_LEN / 2, y: c.y });
+  const e = newEdge(a.id, b.id);
+  e.route = 'straight';
+  e.head = kind === 'arrow' ? 'end' : 'none';
+  model.edges.push(e);
+  sel = new Set();
+  selEdge = model.edges.length - 1;
+  commit();
+}
+
+// Whatever the palette hands over: a shape, or `line:arrow` / `line:plain`.
+function place(shape, c) {
+  if (shape.startsWith('line:')) addLine(shape.slice(5), c);
+  else addNode(shape, c);
+}
+
+// The same shape comes out the same size as its source, so a chain built by
+// clicking dots is a row of matching blocks rather than a ragged one.
+function matchSize(n, from, c) {
+  if (!from || n.shape !== from.shape || LABELLESS.has(n.shape)) return;
+  n.x = snap(c.x - from.w / 2);
+  n.y = snap(c.y - from.h / 2);
+  n.w = from.w;
+  n.h = from.h;
+}
+
 // A new block wired to `from` at `anchor`. The shape defaults to the source's,
 // which is what you almost always want next in a chain.
 function addConnected(from, anchor, shape, c) {
   pushUndo();
   const boxes = groupBoxes();
   const n = makeNode(shape, c);
-  // The same shape comes out the same size as its source, so a chain built by
-  // clicking dots is a row of matching blocks rather than a ragged one.
-  if (shape === from.shape && !LABELLESS.has(shape)) {
-    n.x = snap(c.x - from.w / 2);
-    n.y = snap(c.y - from.h / 2);
-    n.w = from.w;
-    n.h = from.h;
-  }
+  matchSize(n, from, c);
   regroup([n], boxes);
   const e = newEdge(from.id, n.id);
   e.fromAnchor = { side: anchor.side, t: anchor.t };
@@ -764,7 +799,7 @@ function reorderSelection(toFront) {
 }
 
 function selectAll() {
-  sel = new Set(model.nodes.map((n) => n.id));
+  sel = new Set(model.nodes.filter((n) => !isPoint(n)).map((n) => n.id));
   selEdge = -1;
   render();
   notify();
@@ -776,7 +811,25 @@ function selectAll() {
 // Word's task pane iframe, and pasting a picture of a block would be useless
 // anyway. Edges come along only when both of their ends do.
 
+// A selected line copies as a free-standing line: an end attached to a block
+// becomes a loose end at the same spot, since the block isn't being copied.
+function copyLine() {
+  const e = model.edges[selEdge];
+  const pts = edgeGeometry(model)[selEdge];
+  if (!e || !pts || pts.length < 2) return false;
+  const ends = [['from', pts[0]], ['to', pts[pts.length - 1]]].map(([end, at]) => {
+    const n = nodeById(model, e[end]);
+    return isPoint(n) ? n : { id: '_' + end, label: '', shape: 'point', x: at.x, y: at.y, w: 0, h: 0,
+                              fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: false };
+  });
+  const copy = { ...e, from: ends[0].id, to: ends[1].id, fromAnchor: null, toAnchor: null, points: null };
+  clipboard = JSON.parse(JSON.stringify({ nodes: ends, edges: [copy], groups: [] }));
+  clipboard.pastes = 0;
+  return true;
+}
+
 function copySelection() {
+  if (selEdge >= 0) return copyLine();
   const nodes = selectedNodes();
   if (!nodes.length) return false;
   const ids = new Set(nodes.map((n) => n.id));
@@ -829,8 +882,9 @@ function pasteClipboard(dx, dy) {
     n.id = makeId(n.label || n.shape, taken);
     taken.add(n.id);
     remap[source.id] = n.id;
-    n.x = snap(n.x + dx);
-    n.y = snap(n.y + dy);
+    // Loose line ends keep their exact offset; blocks land on the grid.
+    n.x = isPoint(n) ? n.x + snap(dx) : snap(n.x + dx);
+    n.y = isPoint(n) ? n.y + snap(dy) : snap(n.y + dy);
     model.nodes.push(n);
     made.push(n.id);
   }
@@ -855,9 +909,11 @@ function pasteClipboard(dx, dy) {
   // Pasted next to blocks in a group, loose copies join that group. Copies in
   // a pasted group of their own stay in it: regroup leaves whole groups alone.
   regroup(made.map((id) => nodeById(model, id)), boxes);
-  sel = new Set(made.filter((id) => !madeGroups.some((gid) =>
+  const blocks = made.filter((id) => !isPoint(nodeById(model, id)));
+  sel = new Set(blocks.filter((id) => !madeGroups.some((gid) =>
     model.groups.find((g) => g.id === gid).members.includes(id))).concat(madeGroups));
-  selEdge = -1;
+  // A pasted line on its own is selected as a line.
+  selEdge = !blocks.length && clipboard.edges.length ? model.edges.length - 1 : -1;
   commit();
   return true;
 }
@@ -915,24 +971,21 @@ function onPointerDown(ev) {
   const role = ev.target.getAttribute && ev.target.getAttribute('data-role');
   const p = toModel(ev);
 
+  // Pressing a dot starts a new line from it. Nothing is created until the
+  // pointer actually moves: a plain click on a dot is the quick-create
+  // gesture instead (see finishEnd).
   if (role === 'port') {
     const from = nodeById(model, ev.target.getAttribute('data-for'));
     if (!from) return;            // chrome outlived the block it belonged to
     const anchor = { side: ev.target.getAttribute('data-side'), t: +ev.target.getAttribute('data-t') };
-    drag = { mode: 'connect', from, anchor, origin: anchorPoint(from, anchor.side, anchor.t), cur: p, over: null,
-             sx: ev.clientX, sy: ev.clientY };
+    drag = { mode: 'end', edge: null, end: 'to', from, anchor, sx: ev.clientX, sy: ev.clientY };
     render();
     return;
   }
   if (role === 'edge-end') {
     const e = model.edges[selEdge];
     if (!e) return;
-    const end = ev.target.getAttribute('data-end');
-    const pts = edgeGeometry(model)[selEdge];
-    // The rubber band runs from the end that stays put.
-    const fixed = end === 'from' ? pts[pts.length - 1] : pts[0];
-    drag = { mode: 'reattach', edge: e, end, origin: fixed, cur: p, over: null,
-             from: nodeById(model, end === 'from' ? e.to : e.from) };
+    drag = { mode: 'end', edge: e, end: ev.target.getAttribute('data-end'), sx: ev.clientX, sy: ev.clientY };
     render();
     return;
   }
@@ -946,7 +999,7 @@ function onPointerDown(ev) {
     const shape = armedShape;
     armedShape = null;
     ghost = null;
-    addNode(shape, p);
+    place(shape, p);
     notify();
     return;
   }
@@ -977,9 +1030,16 @@ function onPointerDown(ev) {
   if (ei >= 0) {
     selEdge = ei;
     sel = new Set();
+    const e = model.edges[ei];
     const route = edgeRoutes(model)[ei];
     const k = legAt(route, p);
-    if (k >= 0) {
+    const ends = [nodeById(model, e.from), nodeById(model, e.to)];
+    if (freeLine(e)) {
+      // A line attached to nothing is picked up and moved whole, like any
+      // other object on the board.
+      drag = { mode: 'line', start: p, ends: ends.map((n) => ({ n, x: n.x, y: n.y })),
+               bends: e.points ? e.points.map((q) => ({ ...q })) : null, edge: e };
+    } else if (k >= 0) {
       const q = route.raw;
       const horizontal = Math.abs(q[k].y - q[k + 1].y) < 0.5;
       drag = { mode: 'segment', edge: model.edges[ei], route, k, axis: horizontal ? 'y' : 'x' };
@@ -1020,6 +1080,7 @@ function onPointerDown(ev) {
 function legCursor(p) {
   const ei = edgeAt(p);
   if (ei < 0) return null;
+  if (freeLine(model.edges[ei])) return 'move';
   const route = edgeRoutes(model)[ei];
   const k = legAt(route, p);
   if (k < 0) return 'pointer';
@@ -1137,6 +1198,75 @@ function commitOpenEditor() {
   if (open.isConnected && open.wmFinish) open.wmFinish();
 }
 
+// Where the far end of a line is, for angle snapping: a loose end's own spot,
+// an attached end's exact spot, or the middle of a block it floats on.
+function otherEndPoint(e, end) {
+  const other = nodeById(model, end === 'from' ? e.to : e.from);
+  const an = end === 'from' ? e.toAnchor : e.fromAnchor;
+  if (isPoint(other)) return { x: other.x, y: other.y };
+  return an && an.t != null ? anchorPoint(other, an.side, an.t) : centerOf(other);
+}
+
+function snapAngle(o, p) {
+  const step = Math.PI / 4;
+  const a = Math.round(Math.atan2(p.y - o.y, p.x - o.x) / step) * step;
+  const dist = Math.hypot(p.x - o.x, p.y - o.y);
+  return { x: o.x + Math.cos(a) * dist, y: o.y + Math.sin(a) * dist };
+}
+
+// Dragging a line end -- a brand-new line from a dot, or an existing line's
+// end handle. The model is edited as the pointer moves, so the real line
+// follows it live. Over a block the end attaches: at the exact spot if it's
+// within a few pixels of the outline, otherwise floating on the block's best
+// side. In empty space it becomes a loose end. Shift makes the line straight,
+// and a loose end then snaps to 45-degree steps, as in Miro and PowerPoint.
+function moveEnd(ev, p) {
+  if (!drag.edge) {
+    if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) < 4) return;   // still just a click
+    ensureUndo();
+    const pt = makeNode('point', p);
+    const e = newEdge(drag.from.id, pt.id);
+    e.fromAnchor = { side: drag.anchor.side, t: drag.anchor.t };
+    model.edges.push(e);
+    drag.edge = e;
+    drag.point = pt;
+    drag.created = true;
+  }
+  ensureUndo();
+  const e = drag.edge;
+  const end = drag.end;
+  const otherId = end === 'from' ? e.to : e.from;
+  if (drag.point === undefined) {
+    const n = nodeById(model, e[end]);
+    drag.point = isPoint(n) ? n : null;
+  }
+  if (ev.shiftKey) e.route = 'straight';
+  e.points = null;             // bends drawn for the old end mean nothing for the new one
+
+  let target = nodeAt(p, ATTACH_NEAR / view.zoom);
+  if (target && target.id === otherId) target = null;
+  drag.over = target;
+  drag.attachAt = null;
+  if (target) {
+    const hit = nearestOnOutline(target, p);
+    const exact = hit.dist <= ATTACH_NEAR / view.zoom;
+    e[end] = target.id;
+    e[end + 'Anchor'] = exact ? { side: hit.side, t: hit.t } : null;
+    if (exact) drag.attachAt = hit.at;
+  } else {
+    // Reuse this drag's loose end if it has one -- attaching and detaching
+    // again mid-drag mustn't pile up points.
+    let pt = drag.point && model.nodes.includes(drag.point) ? drag.point : null;
+    if (!pt) { pt = makeNode('point', p); drag.point = pt; }
+    const q = ev.shiftKey ? snapAngle(otherEndPoint(e, end), p) : { x: snap(p.x), y: snap(p.y) };
+    pt.x = q.x;
+    pt.y = q.y;
+    e[end] = pt.id;
+    e[end + 'Anchor'] = null;
+  }
+  render();
+}
+
 // Undo is snapshotted on the first movement rather than on pointerdown, so a
 // click that never turns into a drag doesn't fill the stack with no-ops.
 function ensureUndo() {
@@ -1175,19 +1305,24 @@ function onPointerMove(ev) {
     const b = marqueeBox(drag);
     sel = new Set(drag.base);
     for (const n of model.nodes) {
+      if (isPoint(n)) continue;
       if (n.x < b.x + b.w && n.x + n.w > b.x && n.y < b.y + b.h && n.y + n.h > b.y) sel.add(n.id);
     }
     render();
     return;
   }
-  if (drag.mode === 'connect' || drag.mode === 'reattach') {
-    drag.cur = p;
-    drag.over = nodeAt(p, 10 / view.zoom);
+  if (drag.mode === 'end') { moveEnd(ev, p); return; }
+
+  ensureUndo();
+  if (drag.mode === 'line') {
+    if (ev.shiftKey) drag.edge.route = 'straight';
+    const dx = snap(p.x - drag.start.x);
+    const dy = snap(p.y - drag.start.y);
+    for (const b of drag.ends) { b.n.x = b.x + dx; b.n.y = b.y + dy; }
+    if (drag.bends) drag.edge.points = drag.bends.map((q) => ({ x: q.x + dx, y: q.y + dy }));
     render();
     return;
   }
-
-  ensureUndo();
   if (drag.mode === 'move') {
     let rx = p.x - drag.start.x;
     let ry = p.y - drag.start.y;
@@ -1215,6 +1350,9 @@ function onPointerMove(ev) {
     return;
   }
   if (drag.mode === 'segment') {
+    // Shift while dragging a connector straightens it, as it does while
+    // dragging a line end.
+    if (ev.shiftKey) { drag.edge.route = 'straight'; render(); return; }
     // Rebuilt from the route as it was at pointerdown on every move, never
     // accumulated, so a long drag can't drift.
     const { route, k, axis } = drag;
@@ -1228,8 +1366,9 @@ function onPointerMove(ev) {
     drag.edge.points = bends.length ? bends : null;
     // Pin the ports the path was drawn against, so adding another connector
     // to the same side can't re-space this one out from under its bends.
-    drag.edge.fromAnchor = drag.edge.fromAnchor || { ...route.from };
-    drag.edge.toAnchor = drag.edge.toAnchor || { ...route.to };
+    // A side-only anchor (no position) counts as unpinned here.
+    if (!drag.edge.fromAnchor || drag.edge.fromAnchor.t == null) drag.edge.fromAnchor = { ...route.from };
+    if (!drag.edge.toAnchor || drag.edge.toAnchor.t == null) drag.edge.toAnchor = { ...route.to };
     render();
     return;
   }
@@ -1270,8 +1409,7 @@ function onPointerUp(ev) {
   const d = drag;
   drag = null;
 
-  if (d.mode === 'connect') { finishConnect(d, ev); return; }
-  if (d.mode === 'reattach') { finishReattach(d, ev); return; }
+  if (d.mode === 'end') { finishEnd(d, ev); return; }
   if (d.mode === 'marquee') { render(); notify(); return; }
   if (d.mode === 'pan') {
     // Hover is re-read where the pointer came to rest, rather than left over
@@ -1289,11 +1427,11 @@ function onPointerUp(ev) {
   if (d.onRelease) notify();
 }
 
-function finishConnect(d, ev) {
-  const p = toModel(ev);
+function finishEnd(d, ev) {
   // A click on a dot, with no drag: Miro's quick-create. A new block of the
   // same shape appears in that direction, already wired up.
-  if (Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < 4) {
+  if (!d.edge) {
+    if (!d.from) { render(); return; }
     const shape = nextShapeAfter(d.from);
     const [w, h] = shape === d.from.shape ? [d.from.w, d.from.h] : defaultSize(shape);
     const dir = DIRS[d.anchor.side];
@@ -1302,48 +1440,46 @@ function finishConnect(d, ev) {
     addConnected(d.from, d.anchor, shape, { x: fc.x + dir.x * reach, y: fc.y + dir.y * reach });
     return;
   }
-  const target = nodeAt(p, 10 / view.zoom);
-  if (target === d.from) { render(); return; }
-  if (target) {
-    // The landing port is pinned only if you actually aimed at one; otherwise
-    // the side stays automatic so the connector follows the block around.
-    const landed = nearestPort(target, p, 16 / view.zoom);
-    pushUndo();
-    const e = newEdge(d.from.id, target.id);
-    e.fromAnchor = { side: d.anchor.side, t: d.anchor.t };
-    e.toAnchor = landed ? { side: landed.side, t: landed.t } : null;
-    model.edges.push(e);
+  if (!d.undoPushed) { render(); return; }      // an end handle pressed and released without moving
+  const e = d.edge;
+  const endNode = nodeById(model, e[d.end]);
+  // A new line from a dot let go over empty canvas: Miro asks what block to
+  // put there. The loose line is already real, so cancelling the picker just
+  // leaves it -- nothing is thrown away. Without a picker (the tests) the
+  // source's shape goes there directly.
+  if (d.created && isPoint(endNode)) {
+    const suggested = nextShapeAfter(d.from);
+    if (!onPickShape) { blockAtEnd(e, endNode, suggested); return; }
+    sel = new Set();
+    selEdge = model.edges.indexOf(e);          // if the picker is cancelled, the line is left selected
     commit();
+    pendingConnect = { edge: e, point: endNode };
+    render();
+    onPickShape(ev.clientX, ev.clientY, suggested, (shape) => {
+      const pc = pendingConnect;
+      pendingConnect = null;
+      if (shape && model.edges.includes(pc.edge) && model.nodes.includes(pc.point)) blockAtEnd(pc.edge, pc.point, shape);
+      else render();
+    });
     return;
   }
-  // Letting go over empty canvas asks which block to create there -- Miro's
-  // shape picker -- rather than throwing the gesture away. Without a picker
-  // (the tests), it creates the source's shape directly.
-  const suggested = nextShapeAfter(d.from);
-  if (!onPickShape) { addConnected(d.from, d.anchor, suggested, p); return; }
-  pendingConnect = { from: d.from, anchor: d.anchor, origin: d.origin, cur: p, over: null };
-  render();
-  onPickShape(ev.clientX, ev.clientY, suggested, (shape) => {
-    const pc = pendingConnect;
-    pendingConnect = null;
-    if (shape && model.nodes.includes(pc.from)) addConnected(pc.from, pc.anchor, shape, pc.cur);
-    else render();
-  });
+  commit();
 }
 
-// Dropping a connector's end on another block moves that end there. The old
-// bends were drawn for the old block, so the path goes back to automatic.
-function finishReattach(d, ev) {
-  const p = toModel(ev);
-  const target = nodeAt(p, 10 / view.zoom);
-  const other = d.end === 'from' ? d.edge.to : d.edge.from;
-  if (!target || target.id === other || !model.edges.includes(d.edge)) { render(); return; }
-  const landed = nearestPort(target, p, 16 / view.zoom);
-  pushUndo();
-  d.edge[d.end] = target.id;
-  d.edge[d.end + 'Anchor'] = landed ? { side: landed.side, t: landed.t } : null;
-  d.edge.points = null;
+// Puts a new block where a line's loose end is and attaches the end to it.
+// No undo step of its own: it finishes the gesture that drew the line.
+function blockAtEnd(e, pt, shape) {
+  const from = nodeById(model, e.from);
+  const boxes = groupBoxes();
+  const n = makeNode(shape, { x: pt.x, y: pt.y });
+  matchSize(n, from, { x: pt.x, y: pt.y });
+  regroup([n], boxes);
+  e.to = n.id;
+  e.toAnchor = null;
+  sel = new Set([n.id]);
+  selEdge = -1;
   commit();
+  beginLabelEdit(n);
 }
 
 // Zoom keeps the point under the cursor fixed, so the canvas grows and shrinks

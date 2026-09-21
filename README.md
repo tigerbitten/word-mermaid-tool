@@ -22,17 +22,24 @@ Prototype. Word desktop on Windows and Mac.
   start typing. Enter or Esc finishes (keeping what you typed), Shift+Enter
   gives you a second line. Double-clicking a connector edits its label the
   same way.
-- To connect: hover a block and drag one of the blue dots onto another block.
-  The dot you grab is where the connector stays anchored. Drop on empty canvas
-  and a shape picker asks what to create there. **Click** a dot instead of
-  dragging it to add a connected block in that direction.
-- To reconnect: select a connector and drag either of its end dots onto a
-  different block. To reroute: drag any leg of it sideways; the path stays
-  square. *Reset path* goes back to automatic routing.
-- **Straight** in a connector's toolbar makes it one direct line from block to
-  block, at whatever angle; press it again for right angles (any path you
-  drew by hand comes back). Right-click empty canvas to switch every
-  connector at once.
+- **Lines work like Miro's.** Drag an **Arrow** or **Line** from the top of
+  the palette and drop it anywhere; drag either end onto a block to attach it.
+  An end dropped near a block's edge attaches at exactly that spot — any point
+  along any edge, on the real curve of a circle or slope of a diamond; dropped
+  in the middle of a block it floats on whichever side faces the other end.
+  Ends dropped in empty space stay loose. A line with both ends loose drags as
+  a whole.
+- Or start one from a block: hover it and drag a blue dot. Drop it on empty
+  canvas and a shape picker asks what to create there (cancel and the line
+  stays, loose). **Click** a dot instead of dragging to add a connected block
+  in that direction.
+- **Hold Shift while dragging a line** — an end, a new connector, or the line
+  itself — to make it straight; a loose end also snaps to 45° steps.
+  **Straight** in the toolbar does the same and switches back to right angles
+  (any path you drew by hand comes back). Right-click empty canvas to switch
+  every connector at once.
+- To reroute a right-angled connector: drag any leg of it sideways; the path
+  stays square. *Reset path* goes back to automatic routing.
 - Dragging a block snaps it into line with the blocks around it — edges and
   centres — with a pink guide showing what it lined up with.
 - Drag a corner or side handle to resize; hold Shift on a corner to keep the
@@ -91,7 +98,9 @@ tool remembers where you put each block, since Mermaid itself has no way to
 express node positions. A `%% link` line records which side of a block a
 connector was pinned to, a `%% path` line records the bends of a connector
 you rerouted by hand, and `%% route … straight` marks a straightened one; none
-of them appear unless you did that.
+of them appear unless you did that. A line with a loose end needs a node there
+in Mermaid, so the loose end is written as an empty text node
+(`point@{ shape: text, label: " " }`), which Mermaid also draws as nothing.
 
 Everything else rides in standard Mermaid: fills and text sizes are `style`
 statements, connector thickness is a `linkStyle` statement, and a heavy

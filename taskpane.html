@@ -128,7 +128,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v12</span>
+    <span class="build">build v13</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -169,9 +169,9 @@
     <button id="loadBtn" title="Click a diagram in the document first">Open selected</button>
   </div>
 
-<script src="diagram.js?v=12"></script>
-<script src="render.js?v=12"></script>
-<script src="editor.js?v=12"></script>
+<script src="diagram.js?v=13"></script>
+<script src="render.js?v=13"></script>
+<script src="editor.js?v=13"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -199,6 +199,9 @@
                  ['doublecircle', 'State'], ['flag', 'Tag']]],
   ];
   const SHAPES_ALL = SHAPE_SECTIONS.flatMap(([, list]) => list);
+  // Free-standing lines, Miro's line tool: dropped loose, ends dragged onto
+  // blocks. First on the rail. Not shapes, so not in the shape dropdown.
+  const LINE_TOOLS = [['line:arrow', 'Arrow'], ['line:plain', 'Line']];
   // What the picker offers when a connector is dropped on empty canvas.
   const PICKER_SHAPES = ['rect', 'round', 'cylinder', 'trapezoid', 'diamond', 'hexagon', 'queue', 'document'];
   const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#ede9fe', '#eceff1'];
@@ -212,7 +215,7 @@
                  ['top', 'Align top'], ['middle', 'Align middles'], ['bottom', 'Align bottom'],
                  ['dist-h', 'Space evenly across'], ['dist-v', 'Space evenly down'], ['size', 'Match size']];
 
-  const shapeName = (s) => (SHAPES_ALL.find((e) => e[0] === s) || ['', s])[1];
+  const shapeName = (s) => (SHAPES_ALL.concat(LINE_TOOLS).find((e) => e[0] === s) || ['', s])[1];
 
   const src = document.getElementById('src');
   const statusEl = document.getElementById('status');
@@ -256,6 +259,20 @@
   function shapeIcon(shape) {
     const icon = document.createElementNS(SVG_NS, 'svg');
     icon.setAttribute('viewBox', '0 0 40 26');
+    if (shape.startsWith('line:')) {
+      const line = document.createElementNS(SVG_NS, 'path');
+      line.setAttribute('d', shape === 'line:arrow' ? 'M4 20L31 7' : 'M4 20L36 6');
+      line.setAttribute('stroke', '#333');
+      line.setAttribute('stroke-width', '1.8');
+      icon.appendChild(line);
+      if (shape === 'line:arrow') {
+        const head = document.createElementNS(SVG_NS, 'path');
+        head.setAttribute('d', 'M37 4L28 4.5L31.5 11.5Z');
+        head.setAttribute('fill', '#333');
+        icon.appendChild(head);
+      }
+      return icon;
+    }
     const [dw, dh] = defaultSize(shape);
     // Wiring symbols are drawn at their own proportions, centred.
     const box = LABELLESS.has(shape)
@@ -299,7 +316,7 @@
 
   function buildPalette() {
     const host = document.getElementById('palette');
-    for (const [title, list] of SHAPE_SECTIONS) {
+    for (const [title, list] of [['Lines', LINE_TOOLS]].concat(SHAPE_SECTIONS)) {
       const head = document.createElement('div');
       head.className = 'pal-head';
       head.textContent = title;
@@ -321,7 +338,7 @@
           if (already) { armShape(null); setStatus(''); return; }
           item.classList.add('armed');
           armShape(shape);
-          setStatus('click the canvas to place a ' + name.toLowerCase(), 'warning');
+          setStatus('click the canvas to place: ' + name, 'warning');
           placingHint = true;
         });
         host.appendChild(item);
@@ -535,7 +552,8 @@
           sep(), more);
     }
     hint.textContent = toolbar.children.length ? '' :
-      'Drag a shape in from the left. Drag a blue dot to connect, or click one to add the next block. ' +
+      'Drag a shape or a line in from the left. Drag a blue dot to connect, or click one to add the next block. ' +
+      'Hold Shift while dragging a line to straighten it. ' +
       'Right-click for everything else.';
   }
 

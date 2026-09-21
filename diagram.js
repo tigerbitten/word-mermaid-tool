@@ -39,6 +39,10 @@ const SHAPES = {
   junction:          { v11: 'sm-circ' },
   sum:               { v11: 'cross-circ' },
   bar:               { v11: 'fork' },
+  // The loose end of a free-standing line. Mermaid has no line without a node
+  // at each end, so a loose end is an invisible, zero-size, label-less node --
+  // written as an empty text node, which Mermaid also draws as nothing.
+  point:             { v11: 'text' },
 };
 
 // Every name Mermaid 11 accepts in `@{ shape: ... }` for a shape we draw,
@@ -73,8 +77,10 @@ for (const shape in V11_NAMES) for (const name of V11_NAMES[shape]) SHAPE_BY_V11
 
 // Wiring symbols carry no text: a junction dot, a summing node, a bus bar.
 // They get their own natural size instead of a text box's.
-const LABELLESS = new Set(['junction', 'sum', 'bar']);
-const SHAPE_SIZE = { junction: [14, 14], sum: [40, 40], bar: [10, 80] };
+const LABELLESS = new Set(['junction', 'sum', 'bar', 'point']);
+const SHAPE_SIZE = { junction: [14, 14], sum: [40, 40], bar: [10, 80], point: [0, 0] };
+
+const isPoint = (n) => !!n && n.shape === 'point';
 
 const LAYOUT_HEADER = '%% --- layout (word-mermaid-tool v1; safe to ignore) ---';
 const FENCE_OPEN = '```mermaid';
@@ -152,6 +158,9 @@ function unquoteLabel(raw) {
 
 function nodeDecl(n) {
   const s = SHAPES[n.shape] || SHAPES.rect;
+  // A single space, not "": Mermaid shows a node's id in place of an empty
+  // label, so "" would print "point" wherever the diagram is rendered.
+  if (isPoint(n)) return n.id + '@{ shape: text, label: " " }';
   if (s.v11) {
     return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
   }
@@ -201,10 +210,13 @@ function layoutLine(item) {
 }
 
 // Where an edge meets a block: which side, and how far along it. Only written
-// when the user picked a port by hand -- otherwise the side is re-derived on
-// every render, which is what lets connectors follow blocks as you drag them.
+// when the user attached it somewhere by hand -- otherwise the side is
+// re-derived on every render, which is what lets connectors follow blocks as
+// you drag them. A side with no position (`e`) keeps the side but lets the
+// position float with the fan-out.
 function anchorText(a) {
-  return a ? a.side + a.t.toFixed(2) : '-';
+  if (!a) return '-';
+  return a.t == null ? a.side : a.side + a.t.toFixed(3);
 }
 
 function toMermaid(d) {
@@ -409,7 +421,8 @@ function normalizeInlineLabels(line) {
 }
 
 function readAnchor(s) {
-  return s === '-' ? null : { side: s[0], t: +s.slice(1) };
+  if (s === '-') return null;
+  return { side: s[0], t: s.length > 1 ? +s.slice(1) : null };
 }
 
 function parseMermaid(text) {
@@ -450,7 +463,7 @@ function parseMermaid(text) {
       };
       continue;
     }
-    const linkMatch = line.match(/^%%\s+link\s+(\d+)\s+([nesw][\d.]+|-)\s+([nesw][\d.]+|-)\s*$/);
+    const linkMatch = line.match(/^%%\s+link\s+(\d+)\s+([nesw][\d.]*|-)\s+([nesw][\d.]*|-)\s*$/);
     if (linkMatch) {
       anchors[+linkMatch[1]] = [readAnchor(linkMatch[2]), readAnchor(linkMatch[3])];
       continue;
@@ -575,6 +588,12 @@ function parseMermaid(text) {
   }
 
   applyLayout(d, layout);
+
+  // A zero-size empty text node is a loose line end (see SHAPES.point). An
+  // ordinary text label never has zero size, so this can't catch one.
+  for (const n of d.nodes) {
+    if (n.shape === 'text' && n.w === 0 && n.h === 0 && !n.label.trim()) { n.shape = 'point'; n.label = ''; }
+  }
   return d;
 }
 
