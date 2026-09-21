@@ -8,6 +8,7 @@ const GRID = 10;
 const MIN_W = 60;
 const MIN_H = 36;
 const UNDO_DEPTH = 50;
+const PORT_OUT = 12;      // screen px between a block's border and its connection dots
 
 const EDITOR_STYLE = `
   .wm-canvas { width: 100%; height: 100%; display: block; background: #fff; touch-action: none; }
@@ -40,7 +41,7 @@ let notify = () => {};
 let onView = () => {};
 let onMenu = () => {};
 
-const MIN_ZOOM = 0.25;
+const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3;
 let view = { x: 40, y: 40, zoom: 1 };
 // Until the user pans or zooms themselves, the view keeps re-framing the
@@ -222,29 +223,37 @@ function drawChrome() {
 
   if (portNode) {
     for (const p of portSpots(portNode)) {
-      // An invisible disc well larger than the dot does the catching -- a 5px
-      // target is far too fiddly to hit, especially zoomed out.
+      // The dots float just outside the border, the way Miro draws them, so
+      // grabbing a block near its edge moves it instead of starting a
+      // connector, and the side resize handles on the border stay clear. An
+      // invisible disc larger than the dot does the catching -- a 5px target
+      // is far too fiddly to hit, especially zoomed out.
+      const cx = p.x + DIRS[p.side].x * PORT_OUT * s;
+      const cy = p.y + DIRS[p.side].y * PORT_OUT * s;
       el('circle', {
-        cx: p.x, cy: p.y, r: 13 * s, fill: 'transparent', stroke: 'none',
+        cx, cy, r: 10 * s, fill: 'transparent', stroke: 'none',
         style: 'cursor:crosshair', 'data-role': 'port', 'data-for': portNode.id,
         'data-side': p.side, 'data-t': p.t.toFixed(4),
       }, chrome);
       el('circle', {
-        cx: p.x, cy: p.y, r: 5 * s, class: 'wm-port', 'stroke-width': 2 * s,
+        cx, cy, r: 5 * s, class: 'wm-port', 'stroke-width': 2 * s,
         style: 'pointer-events:none',
       }, chrome);
     }
   }
 
   if (only && !drag) {
-    const corners = [
-      ['nw', only.x, only.y], ['ne', only.x + only.w, only.y],
-      ['se', only.x + only.w, only.y + only.h], ['sw', only.x, only.y + only.h],
+    const mx = only.x + only.w / 2;
+    const my = only.y + only.h / 2;
+    const handles = [
+      ['nw', only.x, only.y, 'nwse'], ['n', mx, only.y, 'ns'], ['ne', only.x + only.w, only.y, 'nesw'],
+      ['e', only.x + only.w, my, 'ew'], ['se', only.x + only.w, only.y + only.h, 'nwse'],
+      ['s', mx, only.y + only.h, 'ns'], ['sw', only.x, only.y + only.h, 'nesw'], ['w', only.x, my, 'ew'],
     ];
-    for (const [name, x, y] of corners) {
+    for (const [name, x, y, cursor] of handles) {
       el('rect', {
         x: x - 4 * s, y: y - 4 * s, width: 8 * s, height: 8 * s,
-        class: 'wm-handle', 'stroke-width': 1.5 * s,
+        class: 'wm-handle', 'stroke-width': 1.5 * s, style: 'cursor:' + cursor + '-resize',
         'data-role': 'handle-' + name, 'data-for': only.id,
       }, chrome);
     }
@@ -262,17 +271,40 @@ function nodeAt(p, margin) {
   return null;
 }
 
-// A group is grabbed by its title tab or by its border band. Its interior must
-// stay click-through so you can still select the blocks inside it.
+// Anywhere inside a group's box grabs the group, like a Miro frame. Blocks and
+// connectors are hit-tested first, so the ones inside stay individually
+// selectable.
 function groupAt(p) {
   for (const g of model.groups) {
-    if (!g.w) continue;
-    if (p.x < g.x || p.x > g.x + g.w || p.y < g.y || p.y > g.y + g.h) continue;
-    if (p.y <= g.y + GROUP_TITLE_H) return g;
-    const m = 8;
-    if (p.x <= g.x + m || p.x >= g.x + g.w - m || p.y >= g.y + g.h - m) return g;
+    if (g.w && p.x >= g.x && p.x <= g.x + g.w && p.y >= g.y && p.y <= g.y + g.h) return g;
   }
   return null;
+}
+
+function groupBoxes() {
+  return model.groups.filter((g) => g.w).map((g) => ({ g, x: g.x, y: g.y, w: g.w, h: g.h }));
+}
+
+// Groups behave like Miro frames: a block belongs to whichever group box its
+// centre sits in. Dragging a block out of a group takes it out, dropping one
+// in adds it. `boxes` are the group boxes as they were before the change, so
+// a group stretching to follow a block being dragged out can't keep it.
+// Groups that are moving as a whole are left alone -- moving a group isn't
+// regrouping anything.
+function regroup(nodes, boxes) {
+  const ids = new Set(nodes.map((n) => n.id));
+  const whole = new Set(model.groups.filter((g) => g.members.every((m) => ids.has(m))));
+  for (const n of nodes) {
+    const home = model.groups.find((g) => g.members.includes(n.id)) || null;
+    if (home && whole.has(home)) continue;
+    const c = centerOf(n);
+    const hit = boxes.find((b) => !whole.has(b.g) &&
+      c.x >= b.x && c.x <= b.x + b.w && c.y >= b.y && c.y <= b.y + b.h);
+    const target = hit ? hit.g : null;
+    if (target === home) continue;
+    if (home) home.members = home.members.filter((m) => m !== n.id);
+    if (target) target.members.push(n.id);
+  }
 }
 
 function distToSeg(p, a, b) {
@@ -362,7 +394,9 @@ function makeNode(shape, x, y) {
 
 function addNode(shape, x, y) {
   pushUndo();
+  const boxes = groupBoxes();
   const n = makeNode(shape, x, y);
+  regroup([n], boxes);
   sel = new Set([n.id]);
   selEdge = -1;
   commit();
@@ -477,14 +511,47 @@ function copySelection() {
     nodes,
     edges: model.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
   }));
+  clipboard.pastes = 0;
   return true;
 }
 
 function hasClipboard() { return !!(clipboard && clipboard.nodes.length); }
 
+function clipboardBounds() {
+  const x0 = Math.min(...clipboard.nodes.map((n) => n.x));
+  const y0 = Math.min(...clipboard.nodes.map((n) => n.y));
+  const x1 = Math.max(...clipboard.nodes.map((n) => n.x + n.w));
+  const y1 = Math.max(...clipboard.nodes.map((n) => n.y + n.h));
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// Ctrl+V. Each paste lands a step further down and right than the last, the
+// way PowerPoint and Miro cascade, instead of stacking every copy exactly on
+// top of the previous one. If that spot is off-screen -- you copied, then
+// panned away -- the copy lands in the middle of what you're looking at.
+function pasteNext() {
+  if (!hasClipboard()) return false;
+  clipboard.pastes += 1;
+  const off = 20 * clipboard.pastes;
+  const b = clipboardBounds();
+  const r = svg.getBoundingClientRect();
+  const vx = -view.x / view.zoom;
+  const vy = -view.y / view.zoom;
+  const onScreen = b.x + off < vx + r.width / view.zoom && b.x + b.w + off > vx &&
+                   b.y + off < vy + r.height / view.zoom && b.y + b.h + off > vy;
+  if (onScreen) return pasteClipboard(off, off);
+  const c = canvasCenter();
+  return pasteClipboard(c.x - b.w / 2 - b.x, c.y - b.h / 2 - b.y);
+}
+
+function duplicateSelection() {
+  return copySelection() && pasteNext();
+}
+
 function pasteClipboard(dx, dy) {
   if (!hasClipboard()) return false;
   pushUndo();
+  const boxes = groupBoxes();
   const taken = takenIds();
   const remap = {};
   const made = [];
@@ -508,6 +575,8 @@ function pasteClipboard(dx, dy) {
     if (copy.points) copy.points = copy.points.map((q) => ({ x: q.x + snap(dx), y: q.y + snap(dy) }));
     model.edges.push(copy);
   }
+  // Pasted next to blocks in a group, the copies join that group.
+  regroup(made.map((id) => nodeById(model, id)), boxes);
   sel = new Set(made);
   selEdge = -1;
   commit();
@@ -518,29 +587,32 @@ function pasteClipboard(dx, dy) {
 // what "paste here" from the right-click menu has to mean.
 function pasteAt(p) {
   if (!hasClipboard()) return false;
-  const x0 = Math.min(...clipboard.nodes.map((n) => n.x));
-  const y0 = Math.min(...clipboard.nodes.map((n) => n.y));
-  return pasteClipboard(p.x - x0, p.y - y0);
+  const b = clipboardBounds();
+  return pasteClipboard(p.x - b.x, p.y - b.y);
+}
+
+// Whatever was selected stays selected across undo and redo, as long as it
+// still exists -- undoing a move shouldn't make you re-select the block to
+// carry on. A connector is identified only by its index, which undo can
+// reshuffle, so that one is dropped.
+function restoreModel(text) {
+  model = JSON.parse(text);
+  sel = new Set([...sel].filter((id) => nodeById(model, id) || model.groups.some((g) => g.id === id)));
+  selEdge = -1;
+  render();
+  notify();
 }
 
 function undo() {
   if (!undoStack.length) return;
   redoStack.push(JSON.stringify(model));
-  model = JSON.parse(undoStack.pop());
-  sel = new Set();
-  selEdge = -1;
-  render();
-  notify();
+  restoreModel(undoStack.pop());
 }
 
 function redo() {
   if (!redoStack.length) return;
   undoStack.push(JSON.stringify(model));
-  model = JSON.parse(redoStack.pop());
-  sel = new Set();
-  selEdge = -1;
-  render();
-  notify();
+  restoreModel(redoStack.pop());
 }
 
 // --- pointer ------------------------------------------------------------
@@ -577,12 +649,21 @@ function onPointerDown(ev) {
     return;
   }
 
+  // Shift- or Ctrl-click toggles, as in PowerPoint and Word. Anything that
+  // would shrink the selection waits for the release: pressing on an already
+  // selected block has to leave the whole selection intact in case this turns
+  // into a drag of all of them, and only a click that never moved collapses it.
+  const toggle = ev.shiftKey || ev.ctrlKey || ev.metaKey;
   const n = nodeAt(p);
   if (n) {
-    if (ev.shiftKey) { sel.has(n.id) ? sel.delete(n.id) : sel.add(n.id); }
+    let onRelease = null;
+    if (toggle) { if (sel.has(n.id)) onRelease = 'deselect'; else sel.add(n.id); }
     else if (!sel.has(n.id)) sel = new Set([n.id]);
+    else if (sel.size > 1) onRelease = 'only';
     selEdge = -1;
     startMove(p);
+    drag.onRelease = onRelease;
+    drag.hit = n.id;
     render();
     notify();
     return;
@@ -608,7 +689,7 @@ function onPointerDown(ev) {
 
   const g = groupAt(p);
   if (g) {
-    sel = ev.shiftKey ? new Set([...sel, g.id]) : new Set([g.id]);
+    sel = toggle ? new Set([...sel, g.id]) : new Set([g.id]);
     selEdge = -1;
     startMove(p);
     render();
@@ -645,10 +726,35 @@ function legCursor(p) {
 function startMove(p) {
   const nodes = selectedNodes();
   drag = {
-    mode: 'move', start: p,
+    mode: 'move', start: p, nodes,
     boxes: nodes.map((m) => ({ n: m, x: m.x, y: m.y })),
     riders: riders(new Set(nodes.map((m) => m.id))),
+    // Group membership and boxes as they were at pointerdown. Every move
+    // re-decides membership from these, so a block dragged out of a group and
+    // back in again ends up where it started.
+    members: model.groups.map((g) => [g, g.members.slice()]),
+    groupBoxes: groupBoxes(),
   };
+}
+
+// Esc mid-gesture puts everything back the way it was, as it does everywhere
+// else.
+function cancelDrag() {
+  const d = drag;
+  drag = null;
+  if (d.mode === 'pan') { view.x = d.vx; view.y = d.vy; onView(); }
+  if (d.mode === 'marquee') sel = d.base;
+  if (d.undoPushed) model = JSON.parse(undoStack.pop());
+  svg.style.cursor = 'default';
+  render();
+  notify();
+}
+
+// A label editor is positioned in screen pixels over its block, so anything
+// that moves the view has to close it first or it drifts off the block.
+function commitOpenEditor() {
+  const open = host.querySelector('.wm-label-input');
+  if (open) open.blur();
 }
 
 // Undo is snapshotted on the first movement rather than on pointerdown, so a
@@ -669,7 +775,7 @@ function onPointerMove(ev) {
       hoverNode = near;
       render();
     }
-    svg.style.cursor = nodeAt(p) ? 'move' : legCursor(p) || 'grab';
+    svg.style.cursor = nodeAt(p) ? 'move' : legCursor(p) || (groupAt(p) ? 'move' : 'grab');
     return;
   }
   const p = toModel(ev);
@@ -701,11 +807,19 @@ function onPointerMove(ev) {
 
   ensureUndo();
   if (drag.mode === 'move') {
-    const dx = snap(p.x - drag.start.x);
-    const dy = snap(p.y - drag.start.y);
+    let rx = p.x - drag.start.x;
+    let ry = p.y - drag.start.y;
+    // Shift locks the drag to whichever axis it's mostly moving along.
+    if (ev.shiftKey) { if (Math.abs(rx) > Math.abs(ry)) ry = 0; else rx = 0; }
+    const dx = snap(rx);
+    const dy = snap(ry);
     for (const b of drag.boxes) { b.n.x = snap(b.x + dx); b.n.y = snap(b.y + dy); }
     for (const r of drag.riders) r.e.points = r.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
-    refitGroups();
+    for (const [g, members] of drag.members) g.members = members.slice();
+    regroup(drag.nodes, drag.groupBoxes);
+    // Not refitGroups: that drops groups that have emptied, and a group
+    // emptied halfway through a drag has to be able to come back.
+    for (const g of model.groups) fitGroup(model, g);
     render();
     return;
   }
@@ -733,8 +847,19 @@ function onPointerMove(ev) {
     const c = drag.corner;
     let w = c.includes('e') ? b.w + (p.x - drag.start.x) : (c.includes('w') ? b.w - (p.x - drag.start.x) : b.w);
     let h = c.includes('s') ? b.h + (p.y - drag.start.y) : (c.includes('n') ? b.h - (p.y - drag.start.y) : b.h);
-    w = Math.max(MIN_W, snap(w));
-    h = Math.max(MIN_H, snap(h));
+    if (ev.shiftKey && c.length === 2) {
+      // Shift on a corner keeps the proportions, as in PowerPoint and Miro.
+      // Not snapped, because snapping each side separately would undo it.
+      const k = Math.max(w / b.w, h / b.h, MIN_W / b.w, MIN_H / b.h);
+      w = Math.round(b.w * k);
+      h = Math.round(b.h * k);
+    } else {
+      // Only the sides this handle actually drags get snapped -- snapping the
+      // other one too would make widening a 56px-tall block also change its
+      // height to 60.
+      if (c.includes('e') || c.includes('w')) w = Math.max(MIN_W, snap(w));
+      if (c.includes('n') || c.includes('s')) h = Math.max(MIN_H, snap(h));
+    }
     drag.node.w = w;
     drag.node.h = h;
     drag.node.x = c.includes('w') ? snap(b.x + b.w - w) : b.x;
@@ -757,7 +882,11 @@ function onPointerUp(ev) {
     // Letting go over empty canvas creates the block you were reaching for and
     // wires it up, rather than throwing the gesture away.
     const created = !target;
-    if (created) target = makeNode(d.from.shape === 'text' ? 'rect' : d.from.shape, p.x - 70, p.y - 28);
+    if (created) {
+      const boxes = groupBoxes();
+      target = makeNode(d.from.shape === 'text' ? 'rect' : d.from.shape, p.x - 70, p.y - 28);
+      regroup([target], boxes);
+    }
     // The landing port is pinned only if you actually aimed at one; otherwise
     // the side stays automatic so the connector follows the block around.
     const landed = created ? null : nearestPort(target, p, 16 / view.zoom);
@@ -774,7 +903,12 @@ function onPointerUp(ev) {
   }
   if (d.mode === 'marquee') { render(); notify(); return; }
   if (d.mode === 'pan') { svg.style.cursor = 'default'; render(); return; }
-  if (d.undoPushed) commit(); else render();
+  if (d.undoPushed) { commit(); return; }
+  // A click that never became a drag: now it's safe to shrink the selection.
+  if (d.onRelease === 'deselect') sel.delete(d.hit);
+  if (d.onRelease === 'only') sel = new Set([d.hit]);
+  render();
+  if (d.onRelease) notify();
 }
 
 // Zoom keeps the point under the cursor fixed, so the canvas grows and shrinks
@@ -789,9 +923,30 @@ function zoomAround(next, anchor) {
   onView();
 }
 
+// Scrolling scrolls and Ctrl+scroll zooms, as in Word, PowerPoint and Figma.
+// A trackpad pinch arrives as a ctrl+wheel event in every browser, so the same
+// test covers pinch-to-zoom -- and a two-finger swipe on a Mac trackpad pans
+// instead of zooming wildly, which is what made plain-wheel zoom unusable
+// there.
 function onWheel(ev) {
   ev.preventDefault();
-  zoomAround(view.zoom * Math.exp(-ev.deltaY * 0.0015), toModel(ev));
+  commitOpenEditor();
+  // deltaMode 1 is lines (Firefox, some mice); everything else is pixels.
+  const unit = ev.deltaMode === 1 ? 16 : 1;
+  if (ev.ctrlKey || ev.metaKey) {
+    // Clamped per event: a mouse notch is ~100, a pinch step ~2-10, and both
+    // need to feel like a sensible zoom increment.
+    const d = Math.max(-30, Math.min(30, ev.deltaY * unit));
+    zoomAround(view.zoom * Math.exp(-d * 0.01), toModel(ev));
+    return;
+  }
+  // Shift+wheel scrolls sideways on a mouse with no horizontal wheel.
+  const sideways = ev.shiftKey && !ev.deltaX;
+  view.x -= (sideways ? ev.deltaY : ev.deltaX) * unit;
+  view.y -= (sideways ? 0 : ev.deltaY) * unit;
+  viewTouched = true;
+  render();
+  onView();
 }
 
 function canvasCenter() {
@@ -799,7 +954,7 @@ function canvasCenter() {
   return { x: (r.width / 2 - view.x) / view.zoom, y: (r.height / 2 - view.y) / view.zoom };
 }
 
-function zoomBy(factor) { zoomAround(view.zoom * factor, canvasCenter()); }
+function zoomBy(factor) { commitOpenEditor(); zoomAround(view.zoom * factor, canvasCenter()); }
 function getZoom() { return view.zoom; }
 
 // Right-click selects whatever is under the pointer first, so the menu the
@@ -814,10 +969,12 @@ function onContext(ev) {
     if (!sel.has(n.id)) { sel = new Set([n.id]); }
     selEdge = -1;
   } else {
-    const g = groupAt(p);
-    const ei = g ? -1 : edgeAt(p);
-    if (g) { sel = new Set([g.id]); selEdge = -1; }
-    else if (ei >= 0) { sel = new Set(); selEdge = ei; }
+    // Same order as a left click: a connector inside a group is the
+    // connector, not the group.
+    const ei = edgeAt(p);
+    const g = ei >= 0 ? null : groupAt(p);
+    if (ei >= 0) { sel = new Set(); selEdge = ei; }
+    else if (g) { sel = new Set([g.id]); selEdge = -1; }
     else { sel = new Set(); selEdge = -1; }
   }
   render();
@@ -831,12 +988,13 @@ function onDoubleClick(ev) {
   const p = toModel(ev);
   const n = nodeAt(p, 6 / view.zoom);
   if (n) { beginLabelEdit(n); return; }
-  const g = groupAt(p);
-  if (g) { beginLabelEdit(g); return; }
   const ei = edgeAt(p);
   if (ei >= 0) { selEdge = ei; sel = new Set(); render(); editEdgeLabel(ei); return; }
+  const g = groupAt(p);
+  if (g && p.y <= g.y + GROUP_TITLE_H) { beginLabelEdit(g); return; }
   // Empty canvas: make a block here and name it. Two clicks from nothing to a
-  // named block is the fastest path there is.
+  // named block is the fastest path there is. Inside a group's body the new
+  // block lands in that group.
   addNode('rect', p.x - 70, p.y - 28);
 }
 
@@ -862,6 +1020,11 @@ function beginLabelEdit(item, seed, box) {
   const open = host.querySelector('.wm-label-input');
   if (open) { open.blur(); open.remove(); }
 
+  // A group's name is edited in its title tab, not over the whole group --
+  // a text box the size of the group, with the name floating in the middle
+  // of it, reads as broken.
+  const isGroup = !!item.members;
+  if (isGroup && !box) box = { x: item.x, y: item.y - 4, w: Math.min(item.w, 240), h: GROUP_TITLE_H + 8 };
   const b = box || item;
   const size = (item.fontSize || DEFAULT_FONT_SIZE) * view.zoom;
   const lh = lineH(item.fontSize) * view.zoom;
@@ -879,28 +1042,32 @@ function beginLabelEdit(item, seed, box) {
   // Textareas top-align their text; pad it down so the text sits where it will
   // sit once committed instead of jumping when the editor closes.
   input.style.paddingTop = Math.max(2, (boxH - rows * lh) / 2) + 'px';
+  if (isGroup) input.style.textAlign = 'left';
   host.appendChild(input);
   input.focus();
   if (seed != null) input.setSelectionRange(input.value.length, input.value.length);
   else input.select();
 
   let done = false;
-  const finish = (save) => {
+  const finish = () => {
     if (done) return;
     done = true;
     input.remove();
-    if (save && input.value !== item.label) {
+    if (input.value !== item.label) {
       pushUndo();
       item.label = input.value;
       if (item.shape) fitNodeSize(item);
       commit();
     }
   };
-  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('blur', finish);
+  // Esc keeps what you typed and just stops editing, as it does in Word,
+  // PowerPoint and Miro -- throwing away a label you just typed because you
+  // reached for the key that means "done" is the worst surprise available.
+  // Ctrl+Z takes it back.
   input.addEventListener('keydown', (ev) => {
     ev.stopPropagation();
-    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); finish(true); }
-    else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    if ((ev.key === 'Enter' && !ev.shiftKey) || ev.key === 'Escape') { ev.preventDefault(); finish(); }
   });
 }
 
@@ -923,6 +1090,10 @@ function onKeyDown(ev) {
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (!ev.key) return;            // IME composition and some synthetic events
+  // The canvas is hidden while the Mermaid tab is showing; Delete there must
+  // not quietly delete blocks nobody can see.
+  if (!host.offsetParent) return;
+  if (drag && ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); cancelDrag(); return; }
   const ctrl = ev.ctrlKey || ev.metaKey;
   const k = ev.key.toLowerCase();
   const eat = () => { ev.preventDefault(); ev.stopPropagation(); };
@@ -931,8 +1102,8 @@ function onKeyDown(ev) {
     if (editSelectedLabel()) eat();
   } else if (ctrl && k === 'c') { eat(); copySelection(); }
   else if (ctrl && k === 'x') { eat(); if (copySelection()) deleteSelection(); }
-  else if (ctrl && k === 'v') { eat(); pasteClipboard(20, 20); }
-  else if (ctrl && k === 'd') { eat(); if (copySelection()) pasteClipboard(20, 20); }
+  else if (ctrl && k === 'v') { eat(); pasteNext(); }
+  else if (ctrl && k === 'd') { eat(); duplicateSelection(); }
   else if (ctrl && k === 'a') { eat(); selectAll(); }
   else if (ctrl && k === 'g') { eat(); ev.shiftKey ? ungroupSelection() : groupSelection(); }
   else if (ctrl && k === 'z') { eat(); ev.shiftKey ? redo() : undo(); }
@@ -990,15 +1161,18 @@ function selectionInfo() {
 }
 
 // Never zooms past 1:1. Blowing a two-block diagram up to fill the pane looks
-// broken, and shrinking below half makes labels unreadable -- past that point
-// it's better to clip and let the user pan.
-function fitView() {
+// broken. The automatic fit also stops at half size, below which labels are
+// unreadable and it's better to clip and let the user pan -- but pressing Fit
+// is an explicit request to see all of it (`everything`), and a Fit that still
+// leaves blocks off-screen reads as broken.
+function fitView(everything) {
   const r = host.getBoundingClientRect();
   viewTouched = false;
   if (!model.nodes.length) { view = { x: 40, y: 40, zoom: 1 }; render(); onView(); return; }
   const b = diagramBounds(model);
   const pad = 24;
-  view.zoom = Math.max(0.5, Math.min((r.width - pad * 2) / b.w, (r.height - pad * 2) / b.h, 1));
+  const floor = everything ? MIN_ZOOM : 0.5;
+  view.zoom = Math.max(floor, Math.min((r.width - pad * 2) / b.w, (r.height - pad * 2) / b.h, 1));
   view.x = (r.width - b.w * view.zoom) / 2 - b.x * view.zoom;
   view.y = (r.height - b.h * view.zoom) / 2 - b.y * view.zoom;
   render();

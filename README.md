@@ -16,8 +16,9 @@ Prototype. Word desktop on Windows and Mac.
 - **Right-click anything** for its options: text size, shape, fill, connector
   thickness, copy/paste, group, z-order.
 - To rename a block: double-click it, press Enter or F2, or just select it and
-  start typing. Enter commits, Shift+Enter gives you a second line.
-  Double-clicking a connector edits its label the same way.
+  start typing. Enter or Esc finishes (keeping what you typed), Shift+Enter
+  gives you a second line. Double-clicking a connector edits its label the
+  same way.
 - To connect: hover a block and drag one of the blue dots onto another block.
   There are several dots per side — the one you grab is where the connector
   stays anchored. Drop on empty canvas instead and you get a new block, already
@@ -26,11 +27,14 @@ Prototype. Word desktop on Windows and Mac.
   and dragging a leg that touches a block puts a jog in beside it. Moving the
   blocks afterwards keeps your bends; right-click → *Reset path* goes back to
   automatic routing.
-- Drag corners to resize. Shift-click, or shift-drag a box, to multi-select;
-  group into a labelled boundary; recolor.
-- Drag empty canvas to pan; scroll to zoom.
+- Drag a corner or side handle to resize; hold Shift on a corner to keep the
+  proportions. Shift- or Ctrl-click, or shift-drag a box, to multi-select.
+  Hold Shift while dragging to move in a straight line. Esc mid-drag cancels.
+- Groups work like Miro frames: drag a group by its body, drag a block out to
+  remove it, drop a block in to add it.
+- Drag empty canvas or scroll to pan; Ctrl+scroll or pinch to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
-  in (from an LLM, say) and hit *Apply to canvas*.
+  in (from an LLM, say). Your edits apply when you go back to the canvas.
 - **Insert into document** drops the picture in. **Open selected** picks a
   diagram back up out of a document you've reopened. **Update selected** swaps
   one in place.

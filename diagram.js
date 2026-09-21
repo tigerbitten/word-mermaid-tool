@@ -275,6 +275,7 @@ function parseMermaid(text) {
   const widths = {};
   const styles = {};
   let groupStack = [];
+  let sawHeader = false;
 
   const ensureNode = (ref) => {
     let n = nodeById(d, ref.id);
@@ -317,8 +318,13 @@ function parseMermaid(text) {
     }
     if (line.startsWith('%%')) continue;
 
-    const header = line.match(/^(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)\s*$/i);
-    if (header) { d.direction = header[1].toUpperCase() === 'TB' ? 'TD' : header[1].toUpperCase(); continue; }
+    const header = line.match(/^(?:flowchart|graph)(?:\s+(TD|TB|LR|RL|BT))?\s*$/i);
+    if (header) {
+      sawHeader = true;
+      const dir = (header[1] || 'TD').toUpperCase();
+      d.direction = dir === 'TB' ? 'TD' : dir;
+      continue;
+    }
 
     // Anything starting with `subgraph` opens a group, even the id-less
     // `subgraph "Name"` form an LLM sometimes writes -- falling through would
@@ -372,6 +378,11 @@ function parseMermaid(text) {
       prev = target;
     }
   }
+
+  // The reader is lenient about everything else, which means without this any
+  // stray sentence would parse as a block named after its first word. Mermaid
+  // itself refuses a diagram with no header, so this refuses the same thing.
+  if (!sawHeader) throw new Error('expected a "flowchart LR" (or TD) line at the top');
 
   for (const n of d.nodes) {
     const decl = styles[n.id] || '';

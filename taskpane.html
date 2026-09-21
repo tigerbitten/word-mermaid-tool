@@ -99,7 +99,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v8</span>
+    <span class="build">build v9</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -134,9 +134,9 @@
     <button id="loadBtn">Open selected</button>
   </div>
 
-<script src="diagram.js?v=8"></script>
-<script src="render.js?v=8"></script>
-<script src="editor.js?v=8"></script>
+<script src="diagram.js?v=9"></script>
+<script src="render.js?v=9"></script>
+<script src="editor.js?v=9"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -177,9 +177,15 @@
   const menu = document.getElementById('menu');
   let wordReady = false;
 
+  // Confirmations fade after a few seconds; errors and warnings stay until
+  // something replaces them. A "grouped" left sitting there ten minutes later
+  // stops meaning anything.
+  let statusTimer = null;
   function setStatus(text, kind) {
     statusEl.textContent = text || '';
     statusEl.className = kind ? 'status-' + kind : '';
+    clearTimeout(statusTimer);
+    if (kind === 'success') statusTimer = setTimeout(() => setStatus(''), 4000);
   }
 
   function describeError(e) {
@@ -264,7 +270,9 @@
       if (String(value) === String(current)) o.selected = true;
       s.appendChild(o);
     }
-    s.addEventListener('change', () => fn(s.value));
+    // Focus handed back afterwards: a dropdown that keeps it swallows Delete
+    // and typing, so the very next thing you try on the block does nothing.
+    s.addEventListener('change', () => { fn(s.value); s.blur(); });
     return s;
   }
 
@@ -427,7 +435,7 @@
       row('Shape').appendChild(shapeSelect(info.nodes));
       fillSwatches(row('Fill'));
       sep();
-      act('Duplicate', 'Ctrl+D', () => { if (copySelection()) pasteClipboard(20, 20); });
+      act('Duplicate', 'Ctrl+D', duplicateSelection);
       act('Copy', 'Ctrl+C', copySelection);
       act('Paste here', 'Ctrl+V', () => pasteAt(at), hasClipboard());
       act('Delete', 'Del', deleteSelection);
@@ -458,8 +466,26 @@
     menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
   }
 
+  // True while the Mermaid tab holds typing that hasn't reached the canvas.
+  // Such edits are applied on the way out of the tab, rather than silently
+  // thrown away the moment you click back to the canvas.
+  let srcDirty = false;
+
+  function applySource() {
+    let d;
+    try { d = parseMermaid(src.value); }
+    catch (e) { setStatus('could not parse that Mermaid: ' + e.message, 'error'); return false; }
+    if (!d.nodes.length) { setStatus('no blocks found in that Mermaid -- canvas left alone', 'error'); return false; }
+    setModel(d);
+    onModelChanged();
+    fitView();
+    setStatus('canvas updated from Mermaid', 'success');
+    return true;
+  }
+
   function onModelChanged() {
     src.value = toMermaid(getModel());
+    srcDirty = false;
     document.querySelectorAll('.pal-item.armed').forEach((n) => n.classList.remove('armed'));
     refreshInspector();
   }
@@ -471,6 +497,9 @@
   // --- Word ------------------------------------------------------------
 
   async function insertOrReplace(mode) {
+    // Inserting while the Mermaid tab has unapplied edits inserts those edits,
+    // not the stale canvas behind them.
+    if (srcDirty && !applySource()) return;
     await withButtonsDisabled(async () => {
       const d = getModel();
       if (!d.nodes.length) { setStatus('nothing to insert -- add a block first', 'error'); return; }
@@ -558,6 +587,9 @@
 
   function showTab(which) {
     const canvas = which === 'canvas';
+    // A parse failure keeps you on the Mermaid tab with the error showing,
+    // rather than switching away and losing the text.
+    if (canvas && srcDirty && !applySource()) return;
     document.getElementById('canvasPane').classList.toggle('hidden', !canvas);
     document.getElementById('mdPane').classList.toggle('hidden', canvas);
     document.getElementById('tabCanvas').classList.toggle('active', canvas);
@@ -581,18 +613,10 @@
   document.getElementById('zoomIn').addEventListener('click', () => zoomBy(1.25));
   document.getElementById('zoomOut').addEventListener('click', () => zoomBy(0.8));
   document.getElementById('zoomLevel').addEventListener('click', () => zoomBy(1 / getZoom()));
-  document.getElementById('fitBtn').addEventListener('click', fitView);
+  document.getElementById('fitBtn').addEventListener('click', () => fitView(true));
 
   document.getElementById('applyBtn').addEventListener('click', () => {
-    let d;
-    try { d = parseMermaid(src.value); }
-    catch (e) { setStatus('could not parse that Mermaid: ' + e.message, 'error'); return; }
-    if (!d.nodes.length) { setStatus('no blocks found in that Mermaid -- canvas left alone', 'error'); return; }
-    setModel(d);
-    onModelChanged();
-    fitView();
-    showTab('canvas');
-    setStatus('canvas rebuilt from Mermaid', 'success');
+    if (applySource()) showTab('canvas');
   });
 
   document.getElementById('newBtn').addEventListener('click', () => {
@@ -605,7 +629,9 @@
 
   document.getElementById('copyBtn').addEventListener('click', () => {
     // navigator.clipboard is blocked by Word's iframe permissions policy, so
-    // select the text and let the user press Ctrl+C.
+    // select the text and let the user press Ctrl+C. Unapplied edits go in
+    // first -- overwriting them with the canvas version would lose them.
+    if (srcDirty && !applySource()) return;
     src.value = toAltText(getModel());
     src.focus();
     src.select();
@@ -616,6 +642,7 @@
   document.getElementById('replaceBtn').addEventListener('click', () => insertOrReplace('replace'));
   document.getElementById('loadBtn').addEventListener('click', loadSelected);
 
+  src.addEventListener('input', () => { srcDirty = true; });
   src.addEventListener('keydown', (ev) => {
     ev.stopPropagation();
     if (ev.key === 'Tab') {
@@ -623,6 +650,7 @@
       const start = src.selectionStart;
       src.value = src.value.slice(0, start) + '  ' + src.value.slice(src.selectionEnd);
       src.selectionStart = src.selectionEnd = start + 2;
+      srcDirty = true;
     }
   });
 
