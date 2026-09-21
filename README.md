@@ -110,6 +110,13 @@ of them appear unless you did that. A line with a loose end needs a node there
 in Mermaid, so the loose end is written as an empty text node
 (`point@{ shape: text, label: " " }`), which Mermaid also draws as nothing.
 
+So that a plain Mermaid renderer — and an LLM — sees the diagram the way you
+drew it, the header's direction is read off the drawing (`TD` for a diagram
+that flows downward, `LR` across, `BT`/`RL` for upward or leftward flows),
+blocks and groups are declared in reading order (top-left to bottom-right),
+and connectors are listed grouped by the block they leave. mermaid.live still
+does its own layout, but it keeps the drawing's broad shape.
+
 Everything else rides in standard Mermaid: fills and text sizes are `style`
 statements, connector thickness is a `linkStyle` statement, and a heavy
 connector is also written with Mermaid's own `==>` form so it stays heavy in

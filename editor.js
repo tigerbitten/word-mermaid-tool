@@ -1565,6 +1565,11 @@ function zoomBy(factor) { commitOpenEditor(); zoomAround(view.zoom * factor, can
 function getZoom() { return view.zoom; }
 function isDragging() { return !!drag || !!pendingConnect; }
 
+// For the shell: abandon whatever gesture is in progress, as Esc would. Used
+// when the canvas is hidden -- a half-placed click-click line left running
+// behind the Mermaid tab would otherwise finish on the next click back.
+function cancelGesture() { if (drag) cancelDrag(); }
+
 // Right-click selects whatever is under the pointer first, so the menu the
 // shell builds is always about the thing you aimed at.
 function onContext(ev) {

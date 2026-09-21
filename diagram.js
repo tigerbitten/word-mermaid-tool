@@ -219,28 +219,80 @@ function anchorText(a) {
   return a.t == null ? a.side : a.side + a.t.toFixed(3);
 }
 
-function toMermaid(d) {
-  const lines = ['flowchart ' + d.direction];
+const cx = (n) => n.x + n.w / 2;
+const cy = (n) => n.y + n.h / 2;
 
-  // Nodes are declared inside their subgraph block rather than referenced
-  // from it -- that is the idiomatic form, and it leaves no ambiguity about
-  // which group a node belongs to.
-  const grouped = new Set();
-  for (const g of d.groups) {
-    lines.push('  subgraph ' + g.id + '[' + quoteLabel(g.label) + ']');
-    for (const id of g.members) {
-      const n = nodeById(d, id);
-      if (!n) continue;
-      grouped.add(id);
+// Which way the diagram flows, read off the drawing itself: the axis most
+// connectors run along, and the way the arrows on that axis mostly point. The
+// header is how Mermaid lays a diagram out and how an LLM reads its flow, so
+// one drawn top to bottom must not claim to run left to right.
+function flowDirection(d) {
+  let across = 0;
+  let down = 0;
+  let sx = 0;
+  let sy = 0;
+  for (const e of d.edges) {
+    const a = nodeById(d, e.from);
+    const b = nodeById(d, e.to);
+    if (!a || !b || a === b) continue;
+    const dx = cx(b) - cx(a);
+    const dy = cy(b) - cy(a);
+    // Only a one-way arrow says which way things flow; the rest count for the
+    // axis alone.
+    const sign = e.head === 'end' ? 1 : 0;
+    if (Math.abs(dx) >= Math.abs(dy)) { across++; sx += Math.sign(dx) * sign; }
+    else { down++; sy += Math.sign(dy) * sign; }
+  }
+  if (!across && !down) return d.direction;
+  if (down > across) return sy < 0 ? 'BT' : 'TD';
+  return sx < 0 ? 'RL' : 'LR';
+}
+
+// Left to right along rows, rows top to bottom: the order a person reads the
+// drawing in, and the order Mermaid's own layout then tends to keep. A row is
+// everything whose top edge is within half a block of the row's first.
+function readingOrder(items) {
+  const byTop = items.slice().sort((p, q) => p.y - q.y || p.x - q.x);
+  const rows = [];
+  for (const it of byTop) {
+    const row = rows[rows.length - 1];
+    if (row && it.y - row[0].y < DEFAULT_H / 2) row.push(it);
+    else rows.push([it]);
+  }
+  return rows.flatMap((row) => row.sort((p, q) => p.x - q.x));
+}
+
+function toMermaid(d) {
+  const lines = ['flowchart ' + flowDirection(d)];
+
+  // Groups and loose blocks are declared in reading order, and so are the
+  // blocks inside each group. Nodes are declared inside their subgraph rather
+  // than referenced from it -- that is the idiomatic form, and it leaves no
+  // ambiguity about which group a node belongs to. Loose line ends go last:
+  // they are the least interesting thing in the diagram.
+  const grouped = new Set(d.groups.flatMap((g) => g.members));
+  const top = d.groups.filter((g) => g.members.some((id) => nodeById(d, id)))
+    .concat(d.nodes.filter((n) => !grouped.has(n.id) && !isPoint(n)));
+  const order = [];                      // every node, in the order declared
+  for (const it of readingOrder(top)) {
+    if (!it.members) { lines.push('  ' + nodeDecl(it)); order.push(it); continue; }
+    lines.push('  subgraph ' + it.id + '[' + quoteLabel(it.label) + ']');
+    for (const n of readingOrder(it.members.map((id) => nodeById(d, id)).filter(Boolean))) {
       lines.push('    ' + nodeDecl(n));
+      order.push(n);
     }
     lines.push('  end');
   }
-  for (const n of d.nodes) {
-    if (!grouped.has(n.id)) lines.push('  ' + nodeDecl(n));
-  }
-  for (const e of d.edges) lines.push('  ' + edgeDecl(e));
-  for (const n of d.nodes) {
+  for (const n of d.nodes) if (isPoint(n) && !grouped.has(n.id)) { lines.push('  ' + nodeDecl(n)); order.push(n); }
+
+  // Connectors grouped by the block they leave, in that same order, so the
+  // text reads as the flow does. Everything that refers to a connector by
+  // number (linkStyle, and the %% link / path / route lines) numbers it by
+  // this order, since that is the order they're read back in.
+  const rank = new Map(order.map((n, i) => [n.id, i]));
+  const edges = d.edges.slice().sort((p, q) => rank.get(p.from) - rank.get(q.from) || rank.get(p.to) - rank.get(q.to));
+  for (const e of edges) lines.push('  ' + edgeDecl(e));
+  for (const n of order) {
     const s = styleDecl(n);
     if (s) lines.push('  ' + s);
   }
@@ -248,16 +300,17 @@ function toMermaid(d) {
   for (const g of d.groups) {
     if (g.fontSize && g.fontSize !== GROUP_FONT_SIZE) lines.push('  style ' + g.id + ' font-size:' + g.fontSize + 'px');
   }
-  d.edges.forEach((e, i) => {
+  edges.forEach((e, i) => {
     const s = linkStyleDecl(e, i);
     if (s) lines.push('  ' + s);
   });
 
   // Only nodes are recorded. A group's box is always derived from its members,
-  // so storing it would just be data that can go stale.
+  // so storing it would just be data that can go stale. These lines keep the
+  // model's own order -- stacking order -- which reading order would lose.
   lines.push(LAYOUT_HEADER);
   for (const n of d.nodes) lines.push(layoutLine(n));
-  d.edges.forEach((e, i) => {
+  edges.forEach((e, i) => {
     if (e.fromAnchor || e.toAnchor) {
       lines.push('%% link ' + i + ' ' + anchorText(e.fromAnchor) + ' ' + anchorText(e.toAnchor));
     }
@@ -322,7 +375,9 @@ const BRACKETS = [
 
 // Dash and equals runs are variable-length in Mermaid -- `A ---> B` means the
 // same as `A --> B` but asks dagre for a longer edge, and LLMs emit both.
-const LINK_RE = /^\s*(<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|([^|]*)\|\s*)?/;
+// A label between pipes may be quoted, and a quoted one may contain a pipe of
+// its own (`-->|"a|b"|`), so the quoted form is matched first.
+const LINK_RE = /^\s*(<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/;
 
 function linkFromToken(token) {
   return {
@@ -638,10 +693,14 @@ function applyLayout(d, layout) {
     }
     const acrossGap = DEFAULT_W + 80;
     const downGap = DEFAULT_H + 50;
+    // RL and BT run the layers the other way, so the drawing flows the way the
+    // header says -- and saving it again gives back the same header.
+    const last = Math.max(...rows.keys());
+    const reversed = d.direction === 'RL' || d.direction === 'BT';
     for (const [layer, group] of rows) {
       group.forEach((n, idx) => {
-        const along = layer * acrossGap;
-        const across = idx * downGap;
+        const along = (reversed ? last - layer : layer) * (d.direction === 'LR' || d.direction === 'RL' ? acrossGap : downGap + 30);
+        const across = idx * (d.direction === 'LR' || d.direction === 'RL' ? downGap : acrossGap);
         if (d.direction === 'LR' || d.direction === 'RL') { n.x = 40 + along; n.y = 40 + across; }
         else { n.x = 40 + across; n.y = 40 + along; }
       });

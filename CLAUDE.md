@@ -14,10 +14,15 @@ by the add-in or by an LLM reading the docx.
 Primary workflow is visual: drag-and-drop shapes, connectors, and text boxes
 onto a canvas. A secondary text editor pane exposes the raw Mermaid markdown
 for direct editing; the two views stay in sync (canvas edits regenerate the
-markdown, markdown edits reparse to the canvas). Use existing open-source
-Mermaid tooling (the `mermaid` renderer itself, and any open-source
-Mermaid-editor/parser libraries that fit) rather than writing a Mermaid
-parser or renderer from scratch. No AI integration.
+markdown, markdown edits reparse to the canvas). No AI integration.
+
+Mermaid is the *save format*, not the renderer. Mermaid has no way to express
+node positions and always auto-lays-out, so the canvas draws the diagram
+itself (`render.js`) and the positions ride along as `%%` comment lines,
+keeping the saved text 100% valid Mermaid. The reader (`diagram.js`) is a
+small line-based parser for the flowchart subset we write plus the common
+things LLMs write. Anything the tool writes is checked against the real
+Mermaid 11 parser and renderer in the test pages.
 
 ## Style
 
