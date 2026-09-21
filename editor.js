@@ -7,19 +7,28 @@
 const GRID = 10;
 const MIN_W = 60;
 const MIN_H = 36;
+const MIN_WIRE = 8;       // wiring symbols (junction, bar) may be much smaller than a text box
 const UNDO_DEPTH = 50;
 const PORT_OUT = 12;      // screen px between a block's border and its connection dots
+const QUICK_GAP = 80;     // gap left by click-a-dot quick create
 
 const EDITOR_STYLE = `
   .wm-canvas { width: 100%; height: 100%; display: block; background: #fff; touch-action: none; }
-  .wm-selbox { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
+  .wm-selbox { fill: none; stroke: #2563eb; }
+  .wm-multibox { fill: none; stroke: #2563eb; stroke-dasharray: 5 4; }
+  .wm-hover { fill: none; stroke: #93b4f5; }
   .wm-seledge { fill: none; stroke: #2563eb; opacity: 0.35; }
   .wm-port { fill: #fff; stroke: #2563eb; cursor: crosshair; }
   .wm-handle { fill: #fff; stroke: #2563eb; }
+  .wm-endhandle { fill: #2563eb; stroke: #fff; cursor: move; }
   .wm-rubber { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-marquee { fill: #2563eb; fill-opacity: 0.08; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-droptarget { fill: none; stroke: #16a34a; }
   .wm-seghandle { fill: #fff; stroke: #2563eb; pointer-events: none; }
+  .wm-group-sel { fill: none; stroke: #2563eb; }
+  .wm-group-join { fill: #16a34a; fill-opacity: 0.06; stroke: #16a34a; }
+  .wm-member { fill: #2563eb; fill-opacity: 0.07; stroke: #2563eb; stroke-opacity: 0.55; }
+  .wm-ghost { fill: #2563eb; fill-opacity: 0.06; stroke: #2563eb; stroke-dasharray: 4 3; }
 `;
 
 const PAGE_STYLE = `
@@ -40,6 +49,8 @@ let gridPattern = null;
 let notify = () => {};
 let onView = () => {};
 let onMenu = () => {};
+let onRender = () => {};
+let onPickShape = null;
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3;
@@ -54,9 +65,13 @@ let selEdge = -1;
 let hoverNode = null;
 let drag = null;
 let armedShape = null;
+let ghost = null;         // { shape, p }: preview of a shape about to be placed
+let dragShape = null;     // the palette shape being dragged over the canvas, if any
+let pendingConnect = null; // a connector dropped on empty canvas, waiting on the shape picker
 let undoStack = [];
 let redoStack = [];
 let clipboard = null;
+let styleClipboard = null;
 let menuPoint = { x: 0, y: 0 };
 
 const snap = (v) => Math.round(v / GRID) * GRID;
@@ -70,11 +85,16 @@ function toModel(ev) {
   return { x: (ev.clientX - r.left - view.x) / view.zoom, y: (ev.clientY - r.top - view.y) / view.zoom };
 }
 
-function initEditor(hostEl, onChange, onViewChange, onContextMenu) {
+// `extra.onRender` runs after every redraw (the shell keeps its floating
+// toolbar pinned to the selection with it); `extra.onPickShape(x, y, suggested,
+// done)` shows a shape picker when a connector is dropped on empty canvas.
+function initEditor(hostEl, onChange, onViewChange, onContextMenu, extra) {
   host = hostEl;
   notify = onChange || (() => {});
   onView = onViewChange || (() => {});
   onMenu = onContextMenu || (() => {});
+  onRender = (extra && extra.onRender) || (() => {});
+  onPickShape = (extra && extra.onPickShape) || null;
   host.classList.add('wm-host');
 
   const pageStyle = document.createElement('style');
@@ -101,22 +121,32 @@ function initEditor(hostEl, onChange, onViewChange, onContextMenu) {
   svg.addEventListener('wheel', onWheel, { passive: false });
   svg.addEventListener('dblclick', onDoubleClick);
   svg.addEventListener('contextmenu', onContext);
+  svg.addEventListener('pointerleave', () => { if (ghost && !drag) { ghost = null; render(); } });
   window.addEventListener('keydown', onKeyDown);
 
-  host.addEventListener('dragover', (ev) => { ev.preventDefault(); });
+  // Drag-and-drop from the palette. The shape being dragged is announced by
+  // the shell (dataTransfer can't be read during dragover), so a preview of it
+  // follows the pointer across the canvas the way Miro's does.
+  host.addEventListener('dragover', (ev) => {
+    ev.preventDefault();
+    if (dragShape) { ghost = { shape: dragShape, p: toModel(ev) }; render(); }
+  });
+  host.addEventListener('dragleave', () => { ghost = null; render(); });
   host.addEventListener('drop', (ev) => {
     ev.preventDefault();
+    ghost = null;
     // Carried on text/plain with a prefix rather than a custom MIME type --
     // WebKit (Word for Mac) drops custom types.
     const payload = ev.dataTransfer.getData('text/plain') || '';
-    if (!payload.startsWith('wm-shape:')) return;
-    const p = toModel(ev);
-    addNode(payload.slice(9), p.x - 70, p.y - 28);
+    if (!payload.startsWith('wm-shape:')) { render(); return; }
+    addNode(payload.slice(9), toModel(ev));
   });
 
   new ResizeObserver(() => { if (viewTouched) render(); else fitView(); }).observe(host);
   render();
 }
+
+function setDragShape(shape) { dragShape = shape; if (!shape && ghost) { ghost = null; render(); } }
 
 function render() {
   // Loading, undo and delete all swap the node objects out from under the
@@ -131,6 +161,7 @@ function render() {
   clear(chrome);
   drawDiagram(world, model);
   drawChrome();
+  onRender();
 }
 
 // Ports are spaced roughly every 45px along a side, so a tall or wide block
@@ -160,6 +191,17 @@ function nearestPort(n, p, maxDist) {
   return best;
 }
 
+function groupOf(id) {
+  return model.groups.find((g) => g.members.includes(id)) || null;
+}
+
+function outline(box, pad, cls, width, parent) {
+  el('rect', {
+    x: box.x - pad, y: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2,
+    rx: box.rx || 0, class: cls, 'stroke-width': width,
+  }, parent || chrome);
+}
+
 // Chrome is drawn inside the zoom transform, so every size is divided by the
 // zoom to keep handles and hairlines a constant size on screen.
 function drawChrome() {
@@ -167,36 +209,45 @@ function drawChrome() {
   const only = sel.size === 1 ? nodeById(model, [...sel][0]) : null;
   let portNode = hoverNode || only;
 
-  for (const id of sel) {
-    const box = nodeById(model, id) || model.groups.find((g) => g.id === id);
-    if (!box || !box.w) continue;
-    el('rect', {
-      x: box.x - 3 * s, y: box.y - 3 * s, width: box.w + 6 * s, height: box.h + 6 * s,
-      class: 'wm-selbox', 'stroke-width': 1.5 * s,
-    }, chrome);
-  }
-
-  if (selEdge >= 0 && model.edges[selEdge]) {
-    const pts = edgeGeometry(model)[selEdge];
-    if (pts) {
-      el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
-      // A grip on each leg long enough to grab, so it's obvious the path can
-      // be dragged. Purely visual: the press lands on the connector itself.
-      const self = model.edges[selEdge].from === model.edges[selEdge].to;
-      for (let j = 1; j < pts.length && !self; j++) {
-        const a = pts[j - 1];
-        const b = pts[j];
-        if (Math.hypot(b.x - a.x, b.y - a.y) < 24 * s) continue;
-        const horizontal = Math.abs(a.y - b.y) < 0.5;
-        const w = (horizontal ? 14 : 6) * s;
-        const h = (horizontal ? 6 : 14) * s;
-        el('rect', {
-          x: (a.x + b.x) / 2 - w / 2, y: (a.y + b.y) / 2 - h / 2, width: w, height: h, rx: 2 * s,
-          class: 'wm-seghandle', 'stroke-width': 1.5 * s,
-        }, chrome);
+  // Groups first, underneath everything else. A selected group -- or the
+  // group of a selected block -- is outlined and its members tinted, so what
+  // belongs to it is visible at a glance instead of being guesswork.
+  const litGroups = new Set(model.groups.filter((g) => sel.has(g.id) ||
+    g.members.some((m) => sel.has(m))));
+  if (drag && drag.mode === 'move') {
+    // While dragging, the group the blocks will land in lights up green.
+    const moving = new Set(drag.nodes.map((n) => n.id));
+    for (const g of model.groups) {
+      const joining = g.members.some((m) => moving.has(m)) && !g.members.every((m) => moving.has(m));
+      if (joining && g.w) outline({ ...g, rx: 8 }, 3 * s, 'wm-group-join', 2.5 * s);
+    }
+  } else {
+    for (const g of litGroups) {
+      if (!g.w) continue;
+      outline({ ...g, rx: 8 }, 2 * s, 'wm-group-sel', 2 * s);
+      for (const id of g.members) {
+        const m = nodeById(model, id);
+        if (m && !sel.has(m.id)) outline(m, 2 * s, 'wm-member', 1 * s);
       }
     }
   }
+
+  if (hoverNode && !sel.has(hoverNode.id) && !drag) outline(hoverNode, 2 * s, 'wm-hover', 1.5 * s);
+
+  for (const id of sel) {
+    const box = nodeById(model, id) || model.groups.find((g) => g.id === id);
+    if (!box || !box.w) continue;
+    outline(box, 3 * s, 'wm-selbox', 1.5 * s);
+  }
+  // Several things selected: one box around the lot, as in Miro.
+  if (sel.size > 1) {
+    const b = boundsOf(selectedNodes());
+    if (b) outline(b, 8 * s, 'wm-multibox', 1.2 * s);
+  }
+
+  if (selEdge >= 0 && model.edges[selEdge]) drawEdgeChrome(s);
+
+  if (ghost) drawGhost(ghost.shape, ghost.p);
 
   if (drag && drag.mode === 'marquee') {
     const b = marqueeBox(drag);
@@ -204,24 +255,22 @@ function drawChrome() {
     return;
   }
 
-  if (drag && drag.mode === 'connect') {
+  const wire = drag && (drag.mode === 'connect' || drag.mode === 'reattach') ? drag : pendingConnect;
+  if (wire) {
     el('path', {
-      d: `M${drag.origin.x} ${drag.origin.y}L${drag.cur.x} ${drag.cur.y}`,
+      d: `M${wire.origin.x} ${wire.origin.y}L${wire.cur.x} ${wire.cur.y}`,
       class: 'wm-rubber', 'stroke-width': 1.5 * s,
     }, chrome);
-    if (drag.over && drag.over !== drag.from) {
-      el('rect', {
-        x: drag.over.x - 3 * s, y: drag.over.y - 3 * s, width: drag.over.w + 6 * s, height: drag.over.h + 6 * s,
-        class: 'wm-droptarget', 'stroke-width': 2.5 * s,
-      }, chrome);
+    if (wire.over && wire.over !== wire.from) {
+      outline(wire.over, 3 * s, 'wm-droptarget', 2.5 * s);
       // Show the target's ports mid-drag so there is something to aim at.
-      portNode = drag.over;
+      portNode = wire.over;
     } else {
       portNode = null;
     }
   }
 
-  if (portNode) {
+  if (portNode && !pendingConnect) {
     for (const p of portSpots(portNode)) {
       // The dots float just outside the border, the way Miro draws them, so
       // grabbing a block near its edge moves it instead of starting a
@@ -260,13 +309,72 @@ function drawChrome() {
   }
 }
 
+function drawEdgeChrome(s) {
+  const e = model.edges[selEdge];
+  const pts = edgeGeometry(model)[selEdge];
+  if (!pts) return;
+  el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
+  if (e.from === e.to) return;
+  // A grip on each leg long enough to grab, so it's obvious the path can be
+  // dragged. Purely visual: the press lands on the connector itself. Where the
+  // label sits the grip would cover the text, so the grip goes at the leg's
+  // end instead.
+  const labelMid = e.label ? longestSegmentMidpoint(pts) : null;
+  for (let j = 1; j < pts.length; j++) {
+    let a = pts[j - 1];
+    let b = pts[j];
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 24 * s) continue;
+    if (labelMid && Math.abs((a.x + b.x) / 2 - labelMid.x) < 0.5 && Math.abs((a.y + b.y) / 2 - labelMid.y) < 0.5) {
+      const box = edgeLabelBox(e, pts);
+      const past = Math.abs(a.y - b.y) < 0.5 ? box.w / 2 + 14 * s : box.h / 2 + 14 * s;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len / 2 < past + 10 * s) continue;
+      const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+      const at = { x: labelMid.x + u.x * past, y: labelMid.y + u.y * past };
+      a = { x: at.x - u.x, y: at.y - u.y };
+      b = { x: at.x + u.x, y: at.y + u.y };
+    }
+    const horizontal = Math.abs(a.y - b.y) < 0.5;
+    const w = (horizontal ? 14 : 6) * s;
+    const h = (horizontal ? 6 : 14) * s;
+    el('rect', {
+      x: (a.x + b.x) / 2 - w / 2, y: (a.y + b.y) / 2 - h / 2, width: w, height: h, rx: 2 * s,
+      class: 'wm-seghandle', 'stroke-width': 1.5 * s,
+    }, chrome);
+  }
+  // The two ends: drag one onto another block to reconnect it, as in Miro.
+  if (drag && drag.mode === 'reattach') return;
+  for (const [end, p] of [['from', pts[0]], ['to', pts[pts.length - 1]]]) {
+    el('circle', {
+      cx: p.x, cy: p.y, r: 6 * s, class: 'wm-endhandle', 'stroke-width': 2 * s,
+      'data-role': 'edge-end', 'data-end': end,
+    }, chrome);
+  }
+}
+
+function drawGhost(shape, p) {
+  const [w, h] = defaultSize(shape);
+  const n = { x: p.x - w / 2, y: p.y - h / 2, w, h, shape };
+  for (const part of shapeElement(n)) {
+    part.setAttribute('class', 'wm-ghost');
+    part.setAttribute('stroke-width', 1.5 / view.zoom);
+    part.style.pointerEvents = 'none';
+    chrome.appendChild(part);
+  }
+  if (shape === 'text') outline(n, 0, 'wm-ghost', 1.5 / view.zoom);
+}
+
 // --- hit testing --------------------------------------------------------
 
 function nodeAt(p, margin) {
   const m = margin || 0;
   for (let i = model.nodes.length - 1; i >= 0; i--) {
     const n = model.nodes[i];
-    if (p.x >= n.x - m && p.x <= n.x + n.w + m && p.y >= n.y - m && p.y <= n.y + n.h + m) return n;
+    // Anything smaller than 20px on screen gets its hit area padded out to
+    // that, or a 14px junction -- worse, zoomed out -- is next to impossible
+    // to click.
+    const grow = Math.max(m, Math.max(0, 20 - Math.min(n.w, n.h) * view.zoom) / 2 / view.zoom);
+    if (p.x >= n.x - grow && p.x <= n.x + n.w + grow && p.y >= n.y - grow && p.y <= n.y + n.h + grow) return n;
   }
   return null;
 }
@@ -295,7 +403,7 @@ function regroup(nodes, boxes) {
   const ids = new Set(nodes.map((n) => n.id));
   const whole = new Set(model.groups.filter((g) => g.members.every((m) => ids.has(m))));
   for (const n of nodes) {
-    const home = model.groups.find((g) => g.members.includes(n.id)) || null;
+    const home = groupOf(n.id);
     if (home && whole.has(home)) continue;
     const c = centerOf(n);
     const hit = boxes.find((b) => !whole.has(b.g) &&
@@ -316,12 +424,19 @@ function distToSeg(p, a, b) {
   return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
 }
 
+// A connector is hit on its line or on its label -- clicking the words
+// written on a connector has to pick the connector.
 function edgeAt(p) {
   const geom = edgeGeometry(model);
   for (let i = geom.length - 1; i >= 0; i--) {
     const pts = geom[i];
-    if (!pts) continue;
+    if (!pts || pts.length < 2) continue;
     for (let j = 1; j < pts.length; j++) if (distToSeg(p, pts[j - 1], pts[j]) < 7 / view.zoom + 2) return i;
+    const e = model.edges[i];
+    if (e.label) {
+      const b = edgeLabelBox(e, pts);
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return i;
+    }
   }
   return -1;
 }
@@ -358,6 +473,14 @@ function marqueeBox(d) {
   };
 }
 
+function boundsOf(boxes) {
+  if (!boxes.length) return null;
+  const x0 = Math.min(...boxes.map((b) => b.x));
+  const y0 = Math.min(...boxes.map((b) => b.y));
+  return { x: x0, y: y0, w: Math.max(...boxes.map((b) => b.x + b.w)) - x0,
+           h: Math.max(...boxes.map((b) => b.y + b.h)) - y0 };
+}
+
 // --- model edits --------------------------------------------------------
 
 function pushUndo() {
@@ -381,21 +504,27 @@ function takenIds() {
   return new Set(model.nodes.map((n) => n.id).concat(model.groups.map((g) => g.id)));
 }
 
-// Caller is responsible for pushUndo/commit -- connecting to empty canvas
-// creates a node and an edge as one undoable step.
-function makeNode(shape, x, y) {
-  const label = shape === 'text' ? 'Text' : 'Block';
-  const n = { id: makeId(label, takenIds()), label, shape, x: snap(x), y: snap(y),
-              w: 140, h: 56, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE };
+// Centred on `c`. Caller is responsible for pushUndo/commit -- connecting to
+// empty canvas creates a node and an edge as one undoable step.
+function makeNode(shape, c) {
+  const label = LABELLESS.has(shape) ? '' : shape === 'text' ? 'Text' : 'Block';
+  const [w, h] = defaultSize(shape);
+  // Wiring symbols snap by their centre, so a junction dot sits exactly on the
+  // grid line a wire runs along; text blocks snap by their corner as usual.
+  const wire = LABELLESS.has(shape);
+  const x = wire ? snap(c.x) - w / 2 : snap(c.x - w / 2);
+  const y = wire ? snap(c.y) - h / 2 : snap(c.y - h / 2);
+  const n = { id: makeId(label || shape, takenIds()), label, shape, x, y,
+              w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: false };
   fitNodeSize(n);
   model.nodes.push(n);
   return n;
 }
 
-function addNode(shape, x, y) {
+function addNode(shape, c) {
   pushUndo();
   const boxes = groupBoxes();
-  const n = makeNode(shape, x, y);
+  const n = makeNode(shape, c);
   regroup([n], boxes);
   sel = new Set([n.id]);
   selEdge = -1;
@@ -404,6 +533,27 @@ function addNode(shape, x, y) {
   // wanted, and this saves a separate double-click every single time.
   beginLabelEdit(n);
   return n;
+}
+
+// A new block wired to `from` at `anchor`. The shape defaults to the source's,
+// which is what you almost always want next in a chain.
+function addConnected(from, anchor, shape, c) {
+  pushUndo();
+  const boxes = groupBoxes();
+  const n = makeNode(shape, c);
+  regroup([n], boxes);
+  const e = newEdge(from.id, n.id);
+  e.fromAnchor = { side: anchor.side, t: anchor.t };
+  model.edges.push(e);
+  sel = new Set([n.id]);
+  selEdge = -1;
+  commit();
+  beginLabelEdit(n);
+  return n;
+}
+
+function nextShapeAfter(n) {
+  return n.shape === 'text' || LABELLESS.has(n.shape) ? 'rect' : n.shape;
 }
 
 function deleteSelection() {
@@ -460,6 +610,37 @@ function ungroupSelection() {
   return null;
 }
 
+function addSelectionToGroup(groupId) {
+  const g = model.groups.find((gr) => gr.id === groupId);
+  const nodes = [...sel].map((id) => nodeById(model, id)).filter(Boolean);
+  if (!g || !nodes.length) return 'select one or more blocks first';
+  pushUndo();
+  const ids = new Set(nodes.map((n) => n.id));
+  for (const other of model.groups) other.members = other.members.filter((m) => !ids.has(m));
+  g.members.push(...ids);
+  commit();
+  return null;
+}
+
+// Taking a block out of a group that still visually surrounds it would look
+// like nothing happened, so it's moved just clear of the group's box.
+function removeSelectionFromGroup() {
+  const nodes = [...sel].map((id) => nodeById(model, id)).filter((n) => n && groupOf(n.id));
+  if (!nodes.length) return 'select a block that is in a group';
+  pushUndo();
+  const homes = nodes.map((n) => groupOf(n.id));
+  nodes.forEach((n, i) => { homes[i].members = homes[i].members.filter((m) => m !== n.id); });
+  refitGroups();
+  nodes.forEach((n, i) => {
+    const g = homes[i];
+    if (!g.w) return;
+    const c = centerOf(n);
+    if (c.x >= g.x && c.x <= g.x + g.w && c.y >= g.y && c.y <= g.y + g.h) n.x = snap(g.x + g.w + 30);
+  });
+  commit();
+  return null;
+}
+
 function applyToNodes(fn) {
   const nodes = selectedNodes();
   if (!nodes.length) return;
@@ -479,6 +660,48 @@ function applyToEdge(fn) {
 // hand, and only the bends are being thrown away.
 function resetEdgePath() {
   applyToEdge((e) => { e.points = null; });
+}
+
+// Swaps which end the arrow points at. Anchors and bends swap with it so the
+// line itself doesn't move -- only the direction it's read in.
+function reverseEdge() {
+  applyToEdge((e) => {
+    [e.from, e.to] = [e.to, e.from];
+    [e.fromAnchor, e.toAnchor] = [e.toAnchor, e.fromAnchor];
+    if (e.points) e.points.reverse();
+  });
+}
+
+// Ctrl+B, and the B button: bold on if anything selected isn't bold, off if
+// all of it already is -- the way Word's button behaves with a mixed selection.
+function toggleBold() {
+  if (selEdge >= 0 && model.edges[selEdge]) { applyToEdge((e) => { e.bold = !e.bold; }); return; }
+  const nodes = selectedNodes().filter((n) => !LABELLESS.has(n.shape));
+  if (!nodes.length) return;
+  const on = nodes.some((n) => !n.bold);
+  applyToNodes((n) => { if (!LABELLESS.has(n.shape)) { n.bold = on; fitNodeSize(n); } });
+}
+
+// Miro's copy style / paste style: the look of one thing onto others, without
+// touching their text, shape or position.
+function copyStyle() {
+  const e = selEdge >= 0 ? model.edges[selEdge] : null;
+  const n = selectedNodes()[0];
+  if (e) styleClipboard = { kind: 'edge', dash: e.dash, head: e.head, width: e.width, color: e.color, fontSize: e.fontSize, bold: e.bold };
+  else if (n) styleClipboard = { kind: 'node', fill: n.fill, fontSize: n.fontSize, bold: n.bold };
+  else return false;
+  return true;
+}
+
+function pasteStyle() {
+  if (!styleClipboard) return false;
+  const { kind, ...style } = styleClipboard;
+  if (kind === 'edge' && selEdge >= 0) { applyToEdge((e) => Object.assign(e, style)); return true; }
+  if (kind === 'node' && selectedNodes().length) {
+    applyToNodes((n) => { Object.assign(n, style); fitNodeSize(n); });
+    return true;
+  }
+  return false;
 }
 
 function reorderSelection(toFront) {
@@ -517,14 +740,6 @@ function copySelection() {
 
 function hasClipboard() { return !!(clipboard && clipboard.nodes.length); }
 
-function clipboardBounds() {
-  const x0 = Math.min(...clipboard.nodes.map((n) => n.x));
-  const y0 = Math.min(...clipboard.nodes.map((n) => n.y));
-  const x1 = Math.max(...clipboard.nodes.map((n) => n.x + n.w));
-  const y1 = Math.max(...clipboard.nodes.map((n) => n.y + n.h));
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
 // Ctrl+V. Each paste lands a step further down and right than the last, the
 // way PowerPoint and Miro cascade, instead of stacking every copy exactly on
 // top of the previous one. If that spot is off-screen -- you copied, then
@@ -533,7 +748,7 @@ function pasteNext() {
   if (!hasClipboard()) return false;
   clipboard.pastes += 1;
   const off = 20 * clipboard.pastes;
-  const b = clipboardBounds();
+  const b = boundsOf(clipboard.nodes);
   const r = svg.getBoundingClientRect();
   const vx = -view.x / view.zoom;
   const vy = -view.y / view.zoom;
@@ -557,7 +772,7 @@ function pasteClipboard(dx, dy) {
   const made = [];
   for (const source of clipboard.nodes) {
     const n = JSON.parse(JSON.stringify(source));
-    n.id = makeId(n.label, taken);
+    n.id = makeId(n.label || n.shape, taken);
     taken.add(n.id);
     remap[source.id] = n.id;
     n.x = snap(n.x + dx);
@@ -587,7 +802,7 @@ function pasteClipboard(dx, dy) {
 // what "paste here" from the right-click menu has to mean.
 function pasteAt(p) {
   if (!hasClipboard()) return false;
-  const b = clipboardBounds();
+  const b = boundsOf(clipboard.nodes);
   return pasteClipboard(p.x - b.x, p.y - b.y);
 }
 
@@ -618,6 +833,7 @@ function redo() {
 // --- pointer ------------------------------------------------------------
 
 function onPointerDown(ev) {
+  if (pendingConnect) return;     // the shape picker is open; it owns the next click
   if (ev.button === 1) {
     drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
     ev.preventDefault();
@@ -632,7 +848,20 @@ function onPointerDown(ev) {
     const from = nodeById(model, ev.target.getAttribute('data-for'));
     if (!from) return;            // chrome outlived the block it belonged to
     const anchor = { side: ev.target.getAttribute('data-side'), t: +ev.target.getAttribute('data-t') };
-    drag = { mode: 'connect', from, anchor, origin: anchorPoint(from, anchor.side, anchor.t), cur: p, over: null };
+    drag = { mode: 'connect', from, anchor, origin: anchorPoint(from, anchor.side, anchor.t), cur: p, over: null,
+             sx: ev.clientX, sy: ev.clientY };
+    render();
+    return;
+  }
+  if (role === 'edge-end') {
+    const e = model.edges[selEdge];
+    if (!e) return;
+    const end = ev.target.getAttribute('data-end');
+    const pts = edgeGeometry(model)[selEdge];
+    // The rubber band runs from the end that stays put.
+    const fixed = end === 'from' ? pts[pts.length - 1] : pts[0];
+    drag = { mode: 'reattach', edge: e, end, origin: fixed, cur: p, over: null,
+             from: nodeById(model, end === 'from' ? e.to : e.from) };
     render();
     return;
   }
@@ -643,8 +872,10 @@ function onPointerDown(ev) {
     return;
   }
   if (armedShape) {
-    addNode(armedShape, p.x - 70, p.y - 28);
+    const shape = armedShape;
     armedShape = null;
+    ghost = null;
+    addNode(shape, p);
     notify();
     return;
   }
@@ -767,15 +998,17 @@ function ensureUndo() {
 
 function onPointerMove(ev) {
   if (!drag) {
+    if (pendingConnect) return;
     const p = toModel(ev);
     // Ports show as you approach a block, not only once the pointer is inside
     // it, so the connection dots are already there when you reach for them.
     const near = nodeAt(p, 18 / view.zoom);
-    if (near !== hoverNode) {
-      hoverNode = near;
-      render();
-    }
-    svg.style.cursor = nodeAt(p) ? 'move' : legCursor(p) || (groupAt(p) ? 'move' : 'grab');
+    const hoverChanged = near !== hoverNode;
+    hoverNode = near;
+    if (armedShape) ghost = { shape: armedShape, p };
+    if (hoverChanged || armedShape) render();
+    svg.style.cursor = armedShape ? 'crosshair'
+      : nodeAt(p) ? 'move' : legCursor(p) || (groupAt(p) ? 'move' : 'grab');
     return;
   }
   const p = toModel(ev);
@@ -798,7 +1031,7 @@ function onPointerMove(ev) {
     render();
     return;
   }
-  if (drag.mode === 'connect') {
+  if (drag.mode === 'connect' || drag.mode === 'reattach') {
     drag.cur = p;
     drag.over = nodeAt(p, 10 / view.zoom);
     render();
@@ -845,25 +1078,30 @@ function onPointerMove(ev) {
   if (drag.mode === 'resize') {
     const b = drag.box;
     const c = drag.corner;
+    const wire = LABELLESS.has(drag.node.shape);
+    const minW = wire ? MIN_WIRE : MIN_W;
+    const minH = wire ? MIN_WIRE : MIN_H;
     let w = c.includes('e') ? b.w + (p.x - drag.start.x) : (c.includes('w') ? b.w - (p.x - drag.start.x) : b.w);
     let h = c.includes('s') ? b.h + (p.y - drag.start.y) : (c.includes('n') ? b.h - (p.y - drag.start.y) : b.h);
     if (ev.shiftKey && c.length === 2) {
       // Shift on a corner keeps the proportions, as in PowerPoint and Miro.
       // Not snapped, because snapping each side separately would undo it.
-      const k = Math.max(w / b.w, h / b.h, MIN_W / b.w, MIN_H / b.h);
+      const k = Math.max(w / b.w, h / b.h, minW / b.w, minH / b.h);
       w = Math.round(b.w * k);
       h = Math.round(b.h * k);
     } else {
       // Only the sides this handle actually drags get snapped -- snapping the
       // other one too would make widening a 56px-tall block also change its
-      // height to 60.
-      if (c.includes('e') || c.includes('w')) w = Math.max(MIN_W, snap(w));
-      if (c.includes('n') || c.includes('s')) h = Math.max(MIN_H, snap(h));
+      // height to 60. Wiring symbols aren't snapped at all; a 10px grid is
+      // coarser than the symbol.
+      const s = wire ? Math.round : snap;
+      if (c.includes('e') || c.includes('w')) w = Math.max(minW, s(w));
+      if (c.includes('n') || c.includes('s')) h = Math.max(minH, s(h));
     }
     drag.node.w = w;
     drag.node.h = h;
-    drag.node.x = c.includes('w') ? snap(b.x + b.w - w) : b.x;
-    drag.node.y = c.includes('n') ? snap(b.y + b.h - h) : b.y;
+    drag.node.x = c.includes('w') ? b.x + b.w - w : b.x;
+    drag.node.y = c.includes('n') ? b.y + b.h - h : b.y;
     refitGroups();
     render();
   }
@@ -874,33 +1112,8 @@ function onPointerUp(ev) {
   const d = drag;
   drag = null;
 
-  if (d.mode === 'connect') {
-    const p = toModel(ev);
-    let target = nodeAt(p, 10 / view.zoom);
-    if (target === d.from) { render(); return; }
-    pushUndo();
-    // Letting go over empty canvas creates the block you were reaching for and
-    // wires it up, rather than throwing the gesture away.
-    const created = !target;
-    if (created) {
-      const boxes = groupBoxes();
-      target = makeNode(d.from.shape === 'text' ? 'rect' : d.from.shape, p.x - 70, p.y - 28);
-      regroup([target], boxes);
-    }
-    // The landing port is pinned only if you actually aimed at one; otherwise
-    // the side stays automatic so the connector follows the block around.
-    const landed = created ? null : nearestPort(target, p, 16 / view.zoom);
-    model.edges.push({
-      from: d.from.id, to: target.id, label: '', style: 'arrow', width: DEFAULT_EDGE_W,
-      fromAnchor: { side: d.anchor.side, t: d.anchor.t },
-      toAnchor: landed ? { side: landed.side, t: landed.t } : null,
-      points: null,
-    });
-    if (created) { sel = new Set([target.id]); selEdge = -1; }
-    commit();
-    if (created) beginLabelEdit(target);
-    return;
-  }
+  if (d.mode === 'connect') { finishConnect(d, ev); return; }
+  if (d.mode === 'reattach') { finishReattach(d, ev); return; }
   if (d.mode === 'marquee') { render(); notify(); return; }
   if (d.mode === 'pan') { svg.style.cursor = 'default'; render(); return; }
   if (d.undoPushed) { commit(); return; }
@@ -909,6 +1122,63 @@ function onPointerUp(ev) {
   if (d.onRelease === 'only') sel = new Set([d.hit]);
   render();
   if (d.onRelease) notify();
+}
+
+function finishConnect(d, ev) {
+  const p = toModel(ev);
+  // A click on a dot, with no drag: Miro's quick-create. A new block of the
+  // same shape appears in that direction, already wired up.
+  if (Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < 4) {
+    const shape = nextShapeAfter(d.from);
+    const [w, h] = defaultSize(shape);
+    const dir = DIRS[d.anchor.side];
+    const reach = QUICK_GAP + (dir.x ? (d.from.w + w) / 2 : (d.from.h + h) / 2);
+    const fc = centerOf(d.from);
+    addConnected(d.from, d.anchor, shape, { x: fc.x + dir.x * reach, y: fc.y + dir.y * reach });
+    return;
+  }
+  const target = nodeAt(p, 10 / view.zoom);
+  if (target === d.from) { render(); return; }
+  if (target) {
+    // The landing port is pinned only if you actually aimed at one; otherwise
+    // the side stays automatic so the connector follows the block around.
+    const landed = nearestPort(target, p, 16 / view.zoom);
+    pushUndo();
+    const e = newEdge(d.from.id, target.id);
+    e.fromAnchor = { side: d.anchor.side, t: d.anchor.t };
+    e.toAnchor = landed ? { side: landed.side, t: landed.t } : null;
+    model.edges.push(e);
+    commit();
+    return;
+  }
+  // Letting go over empty canvas asks which block to create there -- Miro's
+  // shape picker -- rather than throwing the gesture away. Without a picker
+  // (the tests), it creates the source's shape directly.
+  const suggested = nextShapeAfter(d.from);
+  if (!onPickShape) { addConnected(d.from, d.anchor, suggested, p); return; }
+  pendingConnect = { from: d.from, anchor: d.anchor, origin: d.origin, cur: p, over: null };
+  render();
+  onPickShape(ev.clientX, ev.clientY, suggested, (shape) => {
+    const pc = pendingConnect;
+    pendingConnect = null;
+    if (shape && model.nodes.includes(pc.from)) addConnected(pc.from, pc.anchor, shape, pc.cur);
+    else render();
+  });
+}
+
+// Dropping a connector's end on another block moves that end there. The old
+// bends were drawn for the old block, so the path goes back to automatic.
+function finishReattach(d, ev) {
+  const p = toModel(ev);
+  const target = nodeAt(p, 10 / view.zoom);
+  const other = d.end === 'from' ? d.edge.to : d.edge.from;
+  if (!target || target.id === other || !model.edges.includes(d.edge)) { render(); return; }
+  const landed = nearestPort(target, p, 16 / view.zoom);
+  pushUndo();
+  d.edge[d.end] = target.id;
+  d.edge[d.end + 'Anchor'] = landed ? { side: landed.side, t: landed.t } : null;
+  d.edge.points = null;
+  commit();
 }
 
 // Zoom keeps the point under the cursor fixed, so the canvas grows and shrinks
@@ -956,14 +1226,17 @@ function canvasCenter() {
 
 function zoomBy(factor) { commitOpenEditor(); zoomAround(view.zoom * factor, canvasCenter()); }
 function getZoom() { return view.zoom; }
+function isDragging() { return !!drag || !!pendingConnect; }
 
 // Right-click selects whatever is under the pointer first, so the menu the
 // shell builds is always about the thing you aimed at.
 function onContext(ev) {
   ev.preventDefault();
+  if (pendingConnect) return;
   const p = toModel(ev);
   menuPoint = p;
   armedShape = null;
+  ghost = null;
   const n = nodeAt(p, 6 / view.zoom);
   if (n) {
     if (!sel.has(n.id)) { sel = new Set([n.id]); }
@@ -995,7 +1268,7 @@ function onDoubleClick(ev) {
   // Empty canvas: make a block here and name it. Two clicks from nothing to a
   // named block is the fastest path there is. Inside a group's body the new
   // block lands in that group.
-  addNode('rect', p.x - 70, p.y - 28);
+  addNode('rect', p);
 }
 
 // An edge has no box to hang the editor on, so one is synthesised over the
@@ -1013,6 +1286,7 @@ function editEdgeLabel(index) {
 // over a selected block. `box` overrides where the editor is placed, for
 // things (edges) that have no box of their own.
 function beginLabelEdit(item, seed, box) {
+  if (item.shape && LABELLESS.has(item.shape)) return;   // a junction dot has no text to edit
   // Commit whatever was already open rather than refusing: double-clicking
   // straight from one block to the next has to just work. blur() only fires if
   // it still had focus, so remove it outright afterwards -- a stranded overlay
@@ -1026,8 +1300,9 @@ function beginLabelEdit(item, seed, box) {
   const isGroup = !!item.members;
   if (isGroup && !box) box = { x: item.x, y: item.y - 4, w: Math.min(item.w, 240), h: GROUP_TITLE_H + 8 };
   const b = box || item;
-  const size = (item.fontSize || DEFAULT_FONT_SIZE) * view.zoom;
-  const lh = lineH(item.fontSize) * view.zoom;
+  const fontSize = item.fontSize || (item.from ? DEFAULT_EDGE_FONT : DEFAULT_FONT_SIZE);
+  const size = fontSize * view.zoom;
+  const lh = lineH(fontSize) * view.zoom;
   const boxH = Math.max(30, (b.h || 32) * view.zoom);
   const rows = Math.max(1, String(item.label || '').split('\n').length);
 
@@ -1039,6 +1314,7 @@ function beginLabelEdit(item, seed, box) {
   input.style.width = Math.max(90, b.w * view.zoom) + 'px';
   input.style.height = boxH + 'px';
   input.style.fontSize = Math.max(11, size) + 'px';
+  if (item.bold) input.style.fontWeight = 'bold';
   // Textareas top-align their text; pad it down so the text sits where it will
   // sit once committed instead of jumping when the editor closes.
   input.style.paddingTop = Math.max(2, (boxH - rows * lh) / 2) + 'px';
@@ -1053,7 +1329,10 @@ function beginLabelEdit(item, seed, box) {
     if (done) return;
     done = true;
     input.remove();
-    if (input.value !== item.label) {
+    // Undo, a load or a delete may have replaced the object while the editor
+    // was open; writing to the orphan would silently go nowhere.
+    const live = model.nodes.includes(item) || model.edges.includes(item) || model.groups.includes(item);
+    if (live && input.value !== item.label) {
       pushUndo();
       item.label = input.value;
       if (item.shape) fitNodeSize(item);
@@ -1079,7 +1358,7 @@ function editSelectedLabel(seed) {
   }
   if (sel.size !== 1) return false;
   const item = nodeById(model, [...sel][0]) || model.groups.find((g) => sel.has(g.id));
-  if (!item) return false;
+  if (!item || (item.shape && LABELLESS.has(item.shape))) return false;
   beginLabelEdit(item, seed);
   return true;
 }
@@ -1093,18 +1372,31 @@ function onKeyDown(ev) {
   // The canvas is hidden while the Mermaid tab is showing; Delete there must
   // not quietly delete blocks nobody can see.
   if (!host.offsetParent) return;
-  if (drag && ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); cancelDrag(); return; }
+  if (pendingConnect) return;     // the shape picker handles its own keys
+  const eat = () => { ev.preventDefault(); ev.stopPropagation(); };
+  if (drag && ev.key === 'Escape') { eat(); cancelDrag(); return; }
   const ctrl = ev.ctrlKey || ev.metaKey;
   const k = ev.key.toLowerCase();
-  const eat = () => { ev.preventDefault(); ev.stopPropagation(); };
+
+  // Miro's view shortcuts. Matched on the physical key, since Shift+1 is
+  // reported as "!" -- and ahead of type-to-rename, which would otherwise
+  // start editing a block with a "!".
+  if (ev.shiftKey && !ctrl && ev.code === 'Digit1') { eat(); fitView(true); return; }
+  if (ev.shiftKey && !ctrl && ev.code === 'Digit0') { eat(); zoomBy(1 / view.zoom); return; }
+  if (ctrl && (k === '=' || k === '+')) { eat(); zoomBy(1.25); return; }
+  if (ctrl && k === '-') { eat(); zoomBy(0.8); return; }
+  if (ctrl && k === '0') { eat(); zoomBy(1 / view.zoom); return; }
 
   if (ev.key === 'Enter' || ev.key === 'F2') {
     if (editSelectedLabel()) eat();
-  } else if (ctrl && k === 'c') { eat(); copySelection(); }
+  } else if (ctrl && ev.altKey && k === 'c') { eat(); copyStyle(); }
+  else if (ctrl && ev.altKey && k === 'v') { eat(); pasteStyle(); }
+  else if (ctrl && k === 'c') { eat(); copySelection(); }
   else if (ctrl && k === 'x') { eat(); if (copySelection()) deleteSelection(); }
   else if (ctrl && k === 'v') { eat(); pasteNext(); }
   else if (ctrl && k === 'd') { eat(); duplicateSelection(); }
   else if (ctrl && k === 'a') { eat(); selectAll(); }
+  else if (ctrl && k === 'b') { eat(); toggleBold(); }
   else if (ctrl && k === 'g') { eat(); ev.shiftKey ? ungroupSelection() : groupSelection(); }
   else if (ctrl && k === 'z') { eat(); ev.shiftKey ? redo() : undo(); }
   else if (ctrl && k === 'y') { eat(); redo(); }
@@ -1129,7 +1421,7 @@ function onKeyDown(ev) {
       render(); notify();
     }
   } else if (ev.key === 'Escape') {
-    sel = new Set(); selEdge = -1; armedShape = null;
+    sel = new Set(); selEdge = -1; armedShape = null; ghost = null;
     render(); notify();
   }
 }
@@ -1147,17 +1439,38 @@ function setModel(d) {
 
 function getModel() { return model; }
 
-function armShape(shape) { armedShape = shape; }
+function armShape(shape) {
+  armedShape = shape;
+  if (!shape) { ghost = null; render(); }
+}
 
 function selectionInfo() {
+  const nodes = [...sel].map((id) => nodeById(model, id)).filter(Boolean);
   return {
-    nodes: [...sel].map((id) => nodeById(model, id)).filter(Boolean),
+    nodes,
     groups: model.groups.filter((g) => sel.has(g.id)),
-    // A block inside a group can be ungrouped too, so the shell needs to know
-    // the selection touches one even when the boundary itself isn't selected.
+    // The group the selected blocks sit in, when they all share one -- the
+    // shell names it, and offers to take them out of it.
+    group: nodes.length && nodes.every((n) => groupOf(n.id) && groupOf(n.id) === groupOf(nodes[0].id))
+      ? groupOf(nodes[0].id) : null,
     inGroup: model.groups.some((g) => g.members.some((m) => sel.has(m))),
-    edge: selEdge >= 0 ? model.edges[selEdge] : null,
+    edge: selEdge >= 0 ? model.edges[selEdge] || null : null,
+    allGroups: model.groups,
   };
+}
+
+// Where the selection is on screen, relative to the canvas host, so the shell
+// can float its toolbar over it. Null when nothing is selected.
+function selectionScreenBox() {
+  let b = null;
+  if (selEdge >= 0 && model.edges[selEdge]) {
+    const pts = edgeGeometry(model)[selEdge];
+    if (pts) b = boundsOf(pts.map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 })));
+  } else {
+    b = boundsOf([...sel].map((id) => nodeById(model, id) || model.groups.find((g) => g.id === id)).filter(Boolean));
+  }
+  if (!b) return null;
+  return { x: view.x + b.x * view.zoom, y: view.y + b.y * view.zoom, w: b.w * view.zoom, h: b.h * view.zoom };
 }
 
 // Never zooms past 1:1. Blowing a two-block diagram up to fill the pane looks

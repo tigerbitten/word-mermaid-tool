@@ -27,6 +27,8 @@
   #palette { width: 7.6rem; flex: none; border-right: 1px solid #e0e0e0;
     overflow-y: auto; padding: 0.3rem 0.2rem; display: grid; align-content: start;
     grid-template-columns: 1fr 1fr; gap: 0.15rem; }
+  .pal-head { grid-column: 1 / -1; font-size: 0.62rem; color: #888; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 0.45rem 0.3rem 0.1rem; }
   .pal-item { display: flex; flex-direction: column; align-items: center;
     padding: 0.35rem 0; border-radius: 5px; cursor: grab; }
   .pal-item:hover { background: #eef3fd; }
@@ -42,29 +44,37 @@
     background: rgba(255,255,255,0.94); border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem; }
   #zoomBar button { min-width: 2.1rem; padding: 0.3rem 0.5rem; font-size: 0.9rem; }
   #zoomLevel { min-width: 3.4rem !important; color: #555; }
+  #hint { position: absolute; left: 0.7rem; bottom: 0.7rem; right: 14rem; color: #8a8f98;
+    font-size: 0.78rem; pointer-events: none; }
 
-  #mdPane { flex-direction: column; padding: 0.6rem; gap: 0.5rem; }
-  #src { flex: 1; min-height: 0; width: 100%; font-family: Consolas, monospace;
-    font-size: 0.9rem; line-height: 1.5; resize: none; border: 1px solid #bbb; border-radius: 5px;
-    padding: 0.5rem 0.5rem 0.5rem 0.7rem; }
-  .md-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  /* The floating toolbar: Miro's contextual bar, pinned above whatever is
+     selected. It is the only place per-object controls live. */
+  #toolbar { position: absolute; z-index: 20; display: flex; align-items: center; gap: 0.2rem;
+    background: #fff; border: 1px solid #d6d9de; border-radius: 8px; padding: 0.25rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14); white-space: nowrap; }
+  #toolbar.hidden { display: none; }
+  #toolbar button, #toolbar select { padding: 0.3rem 0.5rem; font-size: 0.85rem; border-color: transparent;
+    background: transparent; }
+  #toolbar button:hover:not(:disabled), #toolbar select:hover { background: #eef1f5; }
+  #toolbar button.on { background: #dbeafe; color: #1d4ed8; }
+  #toolbar .sep { width: 1px; align-self: stretch; background: #e3e5e8; margin: 0 0.15rem; }
+  #toolbar .chip { font-size: 0.78rem; color: #3b4a6b; background: #eef2fb; border-radius: 4px;
+    padding: 0.2rem 0.45rem; }
+  .dot { display: inline-block; width: 0.95rem; height: 0.95rem; border-radius: 50%;
+    border: 1px solid #999; vertical-align: middle; }
+  .bold-b { font-weight: bold; font-family: Georgia, serif; }
 
-  #inspector { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
-    padding: 0.5rem 0.6rem; border-top: 1px solid #eee; flex: none; min-height: 2.8rem; }
-  .hint { color: #777; font-size: 0.85rem; }
-  .swatch { width: 1.5rem; height: 1.5rem; border: 1px solid #aaa; border-radius: 4px;
-    cursor: pointer; padding: 0; }
-  .stepper { display: inline-flex; align-items: center; gap: 0.15rem; }
-  .stepper button { min-width: 1.9rem; padding: 0.35rem 0.4rem; }
-  .stepper .val { min-width: 1.8rem; text-align: center; font-size: 0.9rem; color: #333; }
+  .stepper { display: inline-flex; align-items: center; gap: 0.1rem; }
+  .stepper .val { min-width: 1.6rem; text-align: center; font-size: 0.85rem; color: #333; }
 
-  /* The right-click menu. Same controls as the inspector, at the pointer. */
-  #menu { position: fixed; z-index: 30; background: #fff; border: 1px solid #c4c4c4;
+  /* Shared by the right-click menu, colour popovers and the shape picker. */
+  .float { position: fixed; z-index: 30; background: #fff; border: 1px solid #c4c4c4;
     border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.20); padding: 0.25rem;
-    min-width: 12.5rem; max-width: 18rem;
-    /* The pane can be shorter than the block menu is tall. */
     max-height: calc(100vh - 1rem); overflow-y: auto; }
-  #menu.hidden { display: none; }
+  /* !important because #picker sets its own display: an id rule outranks this
+     class rule, which left an empty picker frame showing in the corner. */
+  .float.hidden { display: none !important; }
+  #menu { min-width: 13rem; max-width: 19rem; }
   #menu .item { display: flex; width: 100%; align-items: center; justify-content: space-between;
     gap: 0.6rem; text-align: left; border: none; background: none; padding: 0.4rem 0.55rem;
     font-size: 0.9rem; border-radius: 4px; color: #111; }
@@ -72,11 +82,19 @@
   #menu .item .key { color: #999; font-size: 0.78rem; }
   #menu .row { display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.55rem; }
   #menu .row > .cap { font-size: 0.8rem; color: #666; margin-right: auto; }
+  #menu .head { font-size: 0.72rem; color: #888; padding: 0.35rem 0.55rem 0.1rem; }
   #menu hr { border: none; border-top: 1px solid #ededed; margin: 0.25rem 0.3rem; }
-  #menu select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+  #menu select, #menu button:not(.item) { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+  .swatches { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+  .swatch { width: 1.4rem; height: 1.4rem; border: 1px solid #aaa; border-radius: 4px;
+    cursor: pointer; padding: 0; }
+  .swatch.on { box-shadow: 0 0 0 2px #2563eb; }
+  #picker { display: grid; grid-template-columns: repeat(4, 3.2rem); gap: 0.15rem; }
+  #picker .pal-item { cursor: pointer; }
+  #picker .pal-item:first-child { box-shadow: inset 0 0 0 1px #93b4f5; }
 
   /* Reserves its height when empty so nothing jumps when a message appears. */
-  #status { white-space: pre-wrap; min-height: 1.3em; margin: 0 0.6rem; padding: 0.4rem 0.6rem;
+  #status { white-space: pre-wrap; min-height: 1.3em; margin: 0.3rem 0.6rem 0; padding: 0.4rem 0.6rem;
     border: 1px solid transparent; border-radius: 5px; flex: none; font-size: 0.85rem; }
   #status.status-error { color: #b00020; background: #fdecec; border-color: #f3b8b8; }
   #status.status-success { color: #0a7a2f; background: #eaf7ee; border-color: #b8e0c4; }
@@ -88,29 +106,35 @@
   button.primary { background: #2563eb; color: #fff; border-color: #1d4ed8; }
   button.primary:hover:not(:disabled) { background: #1d4ed8; }
   button:disabled { opacity: 0.45; cursor: default; }
-  input[type=text] { border: 1px solid #bbb; border-radius: 5px; padding: 0.45rem 0.6rem;
-    font-size: 0.95rem; font-family: inherit; }
+
+  #mdPane { flex-direction: column; padding: 0.6rem; gap: 0.5rem; }
+  #src { flex: 1; min-height: 0; width: 100%; font-family: Consolas, monospace;
+    font-size: 0.9rem; line-height: 1.5; resize: none; border: 1px solid #bbb; border-radius: 5px;
+    padding: 0.5rem 0.5rem 0.5rem 0.7rem; }
+  .md-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
   #actions { border-top: 1px solid #e0e0e0; padding: 0.6rem; flex: none;
-    display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.3rem; }
 </style>
 </head>
 <body>
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v9</span>
+    <span class="build">build v10</span>
   </div>
 
   <div class="pane" id="canvasPane">
     <div id="palette"></div>
     <div id="canvasWrap">
       <div id="canvasHost"></div>
+      <div id="toolbar" class="hidden"></div>
+      <div id="hint"></div>
       <div id="zoomBar">
-        <button id="zoomOut" title="Zoom out">&minus;</button>
-        <button id="zoomLevel" title="Reset to 100%">100%</button>
-        <button id="zoomIn" title="Zoom in">+</button>
-        <button id="fitBtn" title="Fit diagram to the pane">Fit</button>
+        <button id="zoomOut" title="Zoom out (Ctrl -)">&minus;</button>
+        <button id="zoomLevel" title="Reset to 100% (Shift+0)">100%</button>
+        <button id="zoomIn" title="Zoom in (Ctrl +)">+</button>
+        <button id="fitBtn" title="Fit the whole diagram (Shift+1)">Fit</button>
       </div>
     </div>
   </div>
@@ -124,19 +148,20 @@
     </div>
   </div>
 
-  <div id="inspector"></div>
   <div id="status"></div>
-  <div id="menu" class="hidden"></div>
+  <div id="menu" class="float hidden"></div>
+  <div id="popover" class="float hidden"></div>
+  <div id="picker" class="float hidden"></div>
 
   <div id="actions">
     <button id="insertBtn" class="primary">Insert into document</button>
-    <button id="replaceBtn">Update selected</button>
-    <button id="loadBtn">Open selected</button>
+    <button id="replaceBtn" title="Replaces the diagram you opened, or the picture selected in the document">Update in document</button>
+    <button id="loadBtn" title="Click a diagram in the document first">Open selected</button>
   </div>
 
-<script src="diagram.js?v=9"></script>
-<script src="render.js?v=9"></script>
-<script src="editor.js?v=9"></script>
+<script src="diagram.js?v=10"></script>
+<script src="render.js?v=10"></script>
+<script src="editor.js?v=10"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -153,18 +178,23 @@
 %% BUS 240,40 140x56
 %% MEM 440,40 140x56`;
 
-  // Every shape the model can serialise, in the order they appear on the rail.
-  // Mux and Demux are the trapezoids: standard Mermaid, and exactly how a
-  // datapath diagram draws a multiplexer.
-  const SHAPES_ALL = [
-    ['rect', 'Block'], ['round', 'Rounded'], ['stadium', 'Port'], ['subroutine', 'Module'],
-    ['cylinder', 'Memory'], ['hexagon', 'Bus'], ['diamond', 'Decision'], ['trapezoid', 'Mux'],
-    ['trapezoid_alt', 'Demux'], ['parallelogram', 'I/O'], ['parallelogram_alt', 'Data'],
-    ['circle', 'Node'], ['doublecircle', 'State'], ['flag', 'Tag'], ['text', 'Label'],
+  // Every shape the model can serialise, by section, in rail order.
+  const SHAPE_SECTIONS = [
+    ['Blocks', [['rect', 'Block'], ['round', 'Rounded'], ['subroutine', 'Module'], ['stacked', 'Stacked'],
+                ['stadium', 'Port'], ['text', 'Label']]],
+    ['Hardware', [['trapezoid', 'Mux'], ['trapezoid_alt', 'Demux'], ['buffer', 'Buffer'], ['delay', 'Delay'],
+                  ['queue', 'Queue'], ['sum', 'Sum'], ['junction', 'Junction'], ['bar', 'Bus bar']]],
+    ['Systems', [['cylinder', 'Memory'], ['hexagon', 'Bus'], ['document', 'Document'], ['diamond', 'Decision'],
+                 ['parallelogram', 'I/O'], ['parallelogram_alt', 'Data'], ['circle', 'Node'],
+                 ['doublecircle', 'State'], ['flag', 'Tag']]],
   ];
-  const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#eceff1'];
-  const EDGE_KINDS = [['arrow', 'arrow'], ['line', 'plain line'], ['dotted', 'dotted'],
-                      ['bidir', 'both ways']];
+  const SHAPES_ALL = SHAPE_SECTIONS.flatMap(([, list]) => list);
+  // What the picker offers when a connector is dropped on empty canvas.
+  const PICKER_SHAPES = ['rect', 'round', 'cylinder', 'trapezoid', 'diamond', 'hexagon', 'queue', 'document'];
+  const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#ede9fe', '#eceff1'];
+  const LINE_COLORS = [null, '#1f2937', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed'];
+  const HEADS = [['end', 'one arrow →'], ['both', 'both ends ↔'], ['none', 'no arrow —']];
+  const DASHES = [['solid', 'solid'], ['dotted', 'dotted']];
   const EDGE_WIDTHS = [[1, 'hairline'], [1.5, 'normal'], [2.5, 'heavy'], [4, 'bus'], [6, 'extra wide']];
   const FONT_MIN = 8;
   const FONT_MAX = 42;
@@ -173,8 +203,11 @@
 
   const src = document.getElementById('src');
   const statusEl = document.getElementById('status');
-  const inspector = document.getElementById('inspector');
+  const toolbar = document.getElementById('toolbar');
+  const hint = document.getElementById('hint');
   const menu = document.getElementById('menu');
+  const popover = document.getElementById('popover');
+  const picker = document.getElementById('picker');
   let wordReady = false;
 
   // Confirmations fade after a few seconds; errors and warnings stay until
@@ -205,65 +238,96 @@
     }
   }
 
-  // Palette icons are drawn with the same shape code as the canvas, so the
+  // Shape icons are drawn with the same shape code as the canvas, so the
   // swatch you drag always matches what you get.
+  function shapeIcon(shape) {
+    const icon = document.createElementNS(SVG_NS, 'svg');
+    icon.setAttribute('viewBox', '0 0 40 26');
+    const [dw, dh] = defaultSize(shape);
+    // Wiring symbols are drawn at their own proportions, centred.
+    const box = LABELLESS.has(shape)
+      ? (() => { const k = Math.min(20 / dh, 34 / dw, 1.4); return { x: 20 - dw * k / 2, y: 13 - dh * k / 2, w: dw * k, h: dh * k }; })()
+      : { x: 3, y: 3, w: 34, h: 20 };
+    const parts = shapeElement({ ...box, shape });
+    for (const p of parts) {
+      const solid = /wm-solid/.test(p.getAttribute('class') || '');
+      p.removeAttribute('class');
+      p.setAttribute('fill', p.getAttribute('data-line') ? 'none' : solid ? '#333' : '#fff');
+      p.setAttribute('stroke', '#333');
+      p.setAttribute('stroke-width', '1.5');
+      icon.appendChild(p);
+    }
+    if (!parts.length) {
+      const t = document.createElementNS(SVG_NS, 'text');
+      t.setAttribute('x', 20); t.setAttribute('y', 19);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '16');
+      t.setAttribute('fill', '#333');
+      t.textContent = 'T';
+      icon.appendChild(t);
+    }
+    return icon;
+  }
+
+  function shapeTile(shape) {
+    const item = document.createElement('div');
+    item.className = 'pal-item';
+    item.appendChild(shapeIcon(shape));
+    const label = document.createElement('span');
+    label.textContent = shapeName(shape);
+    item.appendChild(label);
+    return item;
+  }
+
+  // An invisible drag image: the canvas draws its own preview of the shape
+  // following the pointer, and the browser's grey ghost on top of it would be
+  // two previews at once.
+  const BLANK = new Image();
+  BLANK.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
   function buildPalette() {
     const host = document.getElementById('palette');
-    for (const [shape, name] of SHAPES_ALL) {
-      const item = document.createElement('div');
-      item.className = 'pal-item';
-      item.draggable = true;
-      item.title = 'Drag onto the canvas, or click then click where you want it';
-
-      const icon = document.createElementNS(SVG_NS, 'svg');
-      icon.setAttribute('viewBox', '0 0 40 26');
-      const parts = shapeElement({ x: 3, y: 3, w: 34, h: 20, shape });
-      parts.forEach((p, i) => {
-        p.setAttribute('fill', i === 0 ? '#fff' : 'none');
-        p.setAttribute('stroke', '#333');
-        p.setAttribute('stroke-width', '1.5');
-        icon.appendChild(p);
-      });
-      if (!parts.length) {
-        const t = document.createElementNS(SVG_NS, 'text');
-        t.setAttribute('x', 20); t.setAttribute('y', 19);
-        t.setAttribute('text-anchor', 'middle'); t.setAttribute('font-size', '16');
-        t.setAttribute('fill', '#333');
-        t.textContent = 'T';
-        icon.appendChild(t);
+    for (const [title, list] of SHAPE_SECTIONS) {
+      const head = document.createElement('div');
+      head.className = 'pal-head';
+      head.textContent = title;
+      host.appendChild(head);
+      for (const [shape, name] of list) {
+        const item = shapeTile(shape);
+        item.draggable = true;
+        item.title = 'Drag onto the canvas, or click then click where you want it';
+        item.addEventListener('dragstart', (ev) => {
+          ev.dataTransfer.setData('text/plain', 'wm-shape:' + shape);
+          ev.dataTransfer.effectAllowed = 'copy';
+          try { ev.dataTransfer.setDragImage(BLANK, 0, 0); } catch (e) { /* the default ghost is fine */ }
+          setDragShape(shape);
+        });
+        item.addEventListener('dragend', () => setDragShape(null));
+        item.addEventListener('click', () => {
+          const already = item.classList.contains('armed');
+          document.querySelectorAll('.pal-item').forEach((n) => n.classList.remove('armed'));
+          if (already) { armShape(null); setStatus(''); return; }
+          item.classList.add('armed');
+          armShape(shape);
+          setStatus('click the canvas to place a ' + name.toLowerCase(), 'warning');
+        });
+        host.appendChild(item);
       }
-      item.appendChild(icon);
-      const label = document.createElement('span');
-      label.textContent = name;
-      item.appendChild(label);
-
-      item.addEventListener('dragstart', (ev) => {
-        ev.dataTransfer.setData('text/plain', 'wm-shape:' + shape);
-        ev.dataTransfer.effectAllowed = 'copy';
-      });
-      item.addEventListener('click', () => {
-        const already = item.classList.contains('armed');
-        document.querySelectorAll('.pal-item').forEach((n) => n.classList.remove('armed'));
-        if (already) { armShape(null); setStatus(''); return; }
-        item.classList.add('armed');
-        armShape(shape);
-        setStatus('click the canvas to place a ' + name.toLowerCase(), 'warning');
-      });
-      host.appendChild(item);
     }
   }
 
-  // --- controls, shared by the inspector bar and the right-click menu -----
+  // --- controls, shared by the floating toolbar and the right-click menu ---
 
-  function button(text, fn) {
+  function button(text, fn, title) {
     const b = document.createElement('button');
     b.textContent = text;
+    if (title) b.title = title;
     b.addEventListener('click', fn);
     return b;
   }
 
-  function dropdown(options, current, fn) {
+  function dropdown(options, current, fn, title) {
     const s = document.createElement('select');
+    if (title) s.title = title;
     for (const [value, name] of options) {
       const o = document.createElement('option');
       o.value = value; o.textContent = name;
@@ -278,115 +342,221 @@
 
   function shapeSelect(nodes) {
     const current = nodes.length === 1 ? nodes[0].shape : null;
-    return dropdown(SHAPES_ALL, current, (v) => applyToNodes((n) => { n.shape = v; fitNodeSize(n); }));
+    return dropdown(SHAPES_ALL, current, (v) => applyToNodes((n) => {
+      // Switching into or out of a wiring symbol changes what size makes sense.
+      if (LABELLESS.has(v) !== LABELLESS.has(n.shape)) { const [w, h] = defaultSize(v); n.w = w; n.h = h; }
+      n.shape = v;
+      fitNodeSize(n);
+    }), 'Shape');
   }
 
-  function fillSwatches(target) {
-    for (const color of FILLS) {
-      const b = document.createElement('button');
-      b.className = 'swatch';
-      b.title = 'fill';
-      b.style.background = color;
-      b.addEventListener('click', () => applyToNodes((n) => { n.fill = color; }));
-      target.appendChild(b);
-    }
-  }
-
-  function fontStepper(nodes) {
+  // The size is read at click time, not captured when the control is built:
+  // the right-click menu stays open across clicks, so a captured value would
+  // make every press after the first jump back to where it started.
+  function stepper(get, set, title) {
     const wrap = document.createElement('span');
     wrap.className = 'stepper';
+    wrap.title = title;
     const val = document.createElement('span');
     val.className = 'val';
-    val.textContent = nodes[0].fontSize || DEFAULT_FONT_SIZE;
-    // The size is read at click time, not captured when the control is built:
-    // the right-click menu stays open across clicks, so a captured value would
-    // make every press after the first jump back to where it started. The
-    // block keeps its size -- the text wraps within it -- and only grows if
-    // the text genuinely no longer fits, so it never spills over the border.
+    val.textContent = get();
     const step = (delta) => {
-      const next = Math.max(FONT_MIN,
-        Math.min(FONT_MAX, (nodes[0].fontSize || DEFAULT_FONT_SIZE) + delta));
-      applyToNodes((n) => { n.fontSize = next; fitNodeSize(n); });
+      const next = Math.max(FONT_MIN, Math.min(FONT_MAX, get() + delta));
+      set(next);
       val.textContent = next;
     };
-    wrap.appendChild(button('−', () => step(-2)));
+    wrap.appendChild(button('−', () => step(-1), 'Smaller text'));
     wrap.appendChild(val);
-    wrap.appendChild(button('+', () => step(2)));
+    wrap.appendChild(button('+', () => step(1), 'Larger text'));
     return wrap;
   }
 
-  function edgeStyleSelect(edge) {
-    return dropdown(EDGE_KINDS, edge.style, (v) => applyToEdge((e) => { e.style = v; }));
+  // The block keeps its size -- the text wraps within it -- and only grows if
+  // the text genuinely no longer fits, so it never spills over the border.
+  function nodeFontStepper(nodes) {
+    return stepper(() => nodes[0].fontSize || DEFAULT_FONT_SIZE,
+                   (v) => applyToNodes((n) => { n.fontSize = v; fitNodeSize(n); }), 'Text size');
   }
 
-  function edgeWidthSelect(edge) {
-    return dropdown(EDGE_WIDTHS, edge.width || DEFAULT_EDGE_W,
-                    (v) => applyToEdge((e) => { e.width = +v; }));
+  function edgeFontStepper(edge) {
+    return stepper(() => edge.fontSize || DEFAULT_EDGE_FONT,
+                   (v) => applyToEdge((e) => { e.fontSize = v; }), 'Label text size');
   }
 
-  function edgeLabelInput(edge) {
-    const label = document.createElement('input');
-    label.type = 'text';
-    label.placeholder = 'label';
-    label.value = edge.label;
-    label.size = 10;
-    label.addEventListener('change', () => applyToEdge((e) => { e.label = label.value; }));
-    label.addEventListener('keydown', (ev) => ev.stopPropagation());
-    return label;
+  function boldButton(on) {
+    const b = button('B', toggleBold, 'Bold (Ctrl+B)');
+    b.className = 'bold-b' + (on ? ' on' : '');
+    return b;
   }
 
-  // The inspector is the always-visible surface, and only shows controls for
-  // whatever is actually selected -- nothing to read or ignore otherwise.
-  function refreshInspector() {
-    inspector.innerHTML = '';
-    const info = selectionInfo();
-    const add = (n) => inspector.appendChild(n);
-    const hint = (text) => {
-      const s = document.createElement('span');
-      s.className = 'hint';
-      s.textContent = text;
-      return s;
-    };
-
-    if (info.edge) {
-      add(edgeStyleSelect(info.edge));
-      add(edgeWidthSelect(info.edge));
-      add(edgeLabelInput(info.edge));
-      if (info.edge.points) add(button('Reset path', resetEdgePath));
-      else add(hint('drag a leg to reroute'));
-      add(button('Delete', deleteSelection));
-      return;
+  function swatchRow(colors, current, apply, asDot) {
+    const row = document.createElement('div');
+    row.className = 'swatches';
+    for (const color of colors) {
+      const b = document.createElement('button');
+      b.className = 'swatch' + (color === current ? ' on' : '');
+      b.title = color || 'default';
+      b.style.background = color || (asDot ? '#555555' : '#ffffff');
+      b.addEventListener('click', () => { closeFloats(); apply(color); });
+      row.appendChild(b);
     }
-
-    if (info.nodes.length) {
-      add(shapeSelect(info.nodes));
-      add(fontStepper(info.nodes));
-      fillSwatches(inspector);
-      add(button('Group', () => reportRefusal(groupSelection(), 'grouped')));
-      if (info.inGroup) add(button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped')));
-      add(button('Delete', deleteSelection));
-      return;
-    }
-
-    if (info.groups.length) {
-      add(hint('Group "' + info.groups[0].label + '"'));
-      add(button('Rename', () => editSelectedLabel()));
-      add(button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped')));
-      add(button('Delete all', deleteSelection));
-      return;
-    }
-    add(hint('Drag a shape in, or double-click the canvas. Double-click a block to rename it. ' +
-             'Drag a blue dot to connect, drag a connector to reroute it. Right-click for everything else.'));
+    return row;
   }
 
-  // groupSelection/ungroupSelection return null on success, a reason on refusal.
+  // A colour button that opens its swatches in a small popover, the way Miro's
+  // toolbar does, instead of spending half the toolbar on colour chips.
+  function colorButton(current, colors, apply, title, asLine) {
+    const b = document.createElement('button');
+    b.title = title;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = current || (asLine ? '#555555' : '#ffffff');
+    b.appendChild(dot);
+    b.addEventListener('click', () => {
+      const r = b.getBoundingClientRect();
+      popover.innerHTML = '';
+      popover.appendChild(swatchRow(colors, current, apply, asLine));
+      showFloat(popover, r.left, r.bottom + 4);
+    });
+    return b;
+  }
+
+  function fillButton(nodes) {
+    return colorButton(nodes[0].fill, FILLS, (c) => applyToNodes((n) => { n.fill = c; }), 'Fill colour');
+  }
+
+  function lineColorButton(edge) {
+    return colorButton(edge.color, LINE_COLORS, (c) => applyToEdge((e) => { e.color = c; }), 'Line colour', true);
+  }
+
+  function edgeControls(edge) {
+    return [
+      dropdown(DASHES, edge.dash, (v) => applyToEdge((e) => { e.dash = v; }), 'Line style'),
+      dropdown(HEADS, edge.head, (v) => applyToEdge((e) => { e.head = v; }), 'Arrowheads'),
+      dropdown(EDGE_WIDTHS, edge.width || DEFAULT_EDGE_W, (v) => applyToEdge((e) => { e.width = +v; }), 'Thickness'),
+    ];
+  }
+
   function reportRefusal(reason, successText) {
     setStatus(reason || successText, reason ? 'error' : 'success');
   }
 
-  // --- right-click menu ---------------------------------------------------
+  function membersText(g) {
+    const names = g.members.map((id) => nodeById(getModel(), id)).filter(Boolean)
+      .map((n) => n.label || shapeName(n.shape));
+    const shown = names.slice(0, 4).join(', ') + (names.length > 4 ? ', …' : '');
+    return names.length + ' block' + (names.length === 1 ? '' : 's') + ': ' + shown;
+  }
 
-  function closeMenu() { menu.classList.add('hidden'); }
+  // --- the floating toolbar ---------------------------------------------
+
+  function sep() { const s = document.createElement('span'); s.className = 'sep'; return s; }
+  function chip(text, title) {
+    const c = document.createElement('span');
+    c.className = 'chip';
+    c.textContent = text;
+    if (title) c.title = title;
+    return c;
+  }
+
+  function refreshToolbar() {
+    toolbar.innerHTML = '';
+    const info = selectionInfo();
+    const add = (...els) => els.forEach((e) => toolbar.appendChild(e));
+    const more = button('⋯', () => {
+      const r = toolbar.getBoundingClientRect();
+      openMenu(r.right - 4, r.bottom + 4);
+    }, 'More options');
+
+    if (info.edge) {
+      const e = info.edge;
+      add(...edgeControls(e), lineColorButton(e), sep(), edgeFontStepper(e), boldButton(e.bold),
+          sep(), button('⇄', reverseEdge, 'Reverse direction'));
+      if (e.points) add(button('↺', resetEdgePath, 'Reset path to automatic'));
+      add(sep(), more);
+    } else if (info.nodes.length) {
+      const texty = info.nodes.filter((n) => !LABELLESS.has(n.shape));
+      add(shapeSelect(info.nodes), fillButton(info.nodes));
+      if (texty.length) add(sep(), nodeFontStepper(texty), boldButton(texty.every((n) => n.bold)));
+      add(sep());
+      if (info.group) {
+        add(chip('in “' + info.group.label + '”', membersText(info.group)),
+            button('Remove', () => reportRefusal(removeSelectionFromGroup(), 'removed from group'), 'Take out of the group'));
+      } else {
+        add(button('Group', () => reportRefusal(groupSelection(), 'grouped'), 'Group (Ctrl+G)'));
+      }
+      add(sep(), more);
+    } else if (info.groups.length) {
+      const g = info.groups[0];
+      add(chip(g.label + ' · ' + g.members.length + ' block' + (g.members.length === 1 ? '' : 's'), membersText(g)),
+          button('Rename', () => editSelectedLabel()),
+          button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped'), 'Ungroup (Ctrl+Shift+G)'),
+          sep(), more);
+    }
+    hint.textContent = toolbar.children.length ? '' :
+      'Drag a shape in, or double-click the canvas. Drag a blue dot to connect, or click one to add the next block. ' +
+      'Right-click for everything else.';
+  }
+
+  // Runs on every redraw, so the toolbar tracks the selection through pans,
+  // zooms and moves. Hidden mid-gesture, where it would only be in the way.
+  function positionToolbar() {
+    const box = selectionScreenBox();
+    if (!box || !toolbar.children.length || isDragging()) { toolbar.classList.add('hidden'); return; }
+    toolbar.classList.remove('hidden');
+    const wrap = document.getElementById('canvasWrap').getBoundingClientRect();
+    const tw = toolbar.offsetWidth;
+    const th = toolbar.offsetHeight;
+    // Clear of the connection dots, which float 12px outside the border and
+    // have to stay grabbable with the toolbar showing.
+    const gap = 26;
+    let top = box.y - th - gap;
+    if (top < 4) top = box.y + box.h + gap;                         // no room above: go below
+    top = Math.max(4, Math.min(top, wrap.height - th - 4));
+    const left = Math.max(4, Math.min(box.x + box.w / 2 - tw / 2, wrap.width - tw - 4));
+    toolbar.style.left = left + 'px';
+    toolbar.style.top = top + 'px';
+  }
+
+  // --- floating panels: right-click menu, colour popover, shape picker ------
+
+  function showFloat(elm, x, y) {
+    elm.classList.remove('hidden');
+    elm.style.left = '0px';
+    elm.style.top = '0px';
+    const r = elm.getBoundingClientRect();
+    elm.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
+    elm.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
+  }
+
+  let pickerDone = null;
+  function closeFloats() {
+    menu.classList.add('hidden');
+    popover.classList.add('hidden');
+    if (!picker.classList.contains('hidden')) closePicker(null);
+  }
+
+  function closePicker(shape) {
+    picker.classList.add('hidden');
+    const done = pickerDone;
+    pickerDone = null;
+    if (done) done(shape);
+  }
+
+  // Miro's shape picker: a connector dropped on empty canvas asks what to put
+  // there. The source's own shape comes first, so Enter repeats the chain.
+  function openPicker(x, y, suggested, done) {
+    picker.innerHTML = '';
+    pickerDone = done;
+    const order = [suggested].concat(PICKER_SHAPES.filter((s) => s !== suggested)).slice(0, 8);
+    for (const shape of order) {
+      const t = shapeTile(shape);
+      t.addEventListener('click', () => closePicker(shape));
+      picker.appendChild(t);
+    }
+    picker.dataset.suggested = suggested;
+    showFloat(picker, x + 8, y + 8);
+  }
 
   function openMenu(x, y) {
     const info = selectionInfo();
@@ -404,66 +574,86 @@
         k.textContent = key;
         b.appendChild(k);
       }
-      b.addEventListener('click', () => { closeMenu(); fn(); });
+      b.addEventListener('click', () => { closeFloats(); fn(); });
       menu.appendChild(b);
       return b;
     };
-    const row = (caption) => {
+    const row = (caption, ...els) => {
       const r = document.createElement('div');
       r.className = 'row';
-      if (caption) {
-        const c = document.createElement('span');
-        c.className = 'cap';
-        c.textContent = caption;
-        r.appendChild(c);
-      }
+      const c = document.createElement('span');
+      c.className = 'cap';
+      c.textContent = caption;
+      r.appendChild(c);
+      els.forEach((e) => r.appendChild(e));
       menu.appendChild(r);
       return r;
     };
-    const sep = () => menu.appendChild(document.createElement('hr'));
+    const head = (text) => { const h = document.createElement('div'); h.className = 'head'; h.textContent = text; menu.appendChild(h); };
+    const hr = () => menu.appendChild(document.createElement('hr'));
+    const styleItems = () => {
+      act('Copy style', 'Ctrl+Alt+C', copyStyle);
+      act('Paste style', 'Ctrl+Alt+V', pasteStyle);
+    };
 
     if (info.edge) {
+      const e = info.edge;
       act('Edit label', 'F2', () => editSelectedLabel());
-      row('Style').appendChild(edgeStyleSelect(info.edge));
-      row('Thickness').appendChild(edgeWidthSelect(info.edge));
-      sep();
-      act('Reset path', '', resetEdgePath, !!info.edge.points);
+      const [dash, heads, width] = edgeControls(e);
+      row('Line', dash);
+      row('Arrowheads', heads);
+      row('Thickness', width);
+      row('Colour', swatchRow(LINE_COLORS, e.color, (c) => applyToEdge((x) => { x.color = c; }), true));
+      row('Label size', edgeFontStepper(e), boldButton(e.bold));
+      hr();
+      act('Reverse direction', '', reverseEdge);
+      act('Reset path', '', resetEdgePath, !!e.points);
+      styleItems();
+      hr();
       act('Delete connector', 'Del', deleteSelection);
     } else if (info.nodes.length) {
-      act('Edit text', 'F2', () => editSelectedLabel());
-      row('Text size').appendChild(fontStepper(info.nodes));
-      row('Shape').appendChild(shapeSelect(info.nodes));
-      fillSwatches(row('Fill'));
-      sep();
+      const texty = info.nodes.filter((n) => !LABELLESS.has(n.shape));
+      if (texty.length) {
+        act('Edit text', 'F2', () => editSelectedLabel(), info.nodes.length === 1);
+        row('Text size', nodeFontStepper(texty), boldButton(texty.every((n) => n.bold)));
+      }
+      row('Shape', shapeSelect(info.nodes));
+      row('Fill', swatchRow(FILLS, info.nodes[0].fill, (c) => applyToNodes((n) => { n.fill = c; })));
+      hr();
       act('Duplicate', 'Ctrl+D', duplicateSelection);
       act('Copy', 'Ctrl+C', copySelection);
       act('Paste here', 'Ctrl+V', () => pasteAt(at), hasClipboard());
+      styleItems();
       act('Delete', 'Del', deleteSelection);
-      sep();
-      act('Group', 'Ctrl+G', () => reportRefusal(groupSelection(), 'grouped'));
-      act('Ungroup', 'Ctrl+Shift+G', () => reportRefusal(ungroupSelection(), 'ungrouped'), info.inGroup);
+      hr();
+      // Grouping, spelled out: which group this is in, and every group it
+      // could be moved into, rather than making you find the dashed box.
+      head(info.group ? 'In group “' + info.group.label + '”' : 'Groups');
+      act('New group from selection', 'Ctrl+G', () => reportRefusal(groupSelection(), 'grouped'));
+      for (const g of info.allGroups.filter((gr) => gr !== info.group).slice(0, 6)) {
+        act('Add to “' + g.label + '”', '', () => reportRefusal(addSelectionToGroup(g.id), 'added to ' + g.label));
+      }
+      if (info.inGroup) act('Remove from group', '', () => reportRefusal(removeSelectionFromGroup(), 'removed from group'));
+      hr();
       act('Bring to front', '', () => reorderSelection(true));
       act('Send to back', '', () => reorderSelection(false));
     } else if (info.groups.length) {
+      const g = info.groups[0];
+      head(g.label + ' — ' + membersText(g));
       act('Rename group', 'F2', () => editSelectedLabel());
       act('Ungroup', 'Ctrl+Shift+G', () => reportRefusal(ungroupSelection(), 'ungrouped'));
-      sep();
+      act('Duplicate group', 'Ctrl+D', duplicateSelection);
+      hr();
       act('Delete group and blocks', 'Del', deleteSelection);
     } else {
-      act('Add block here', '', () => addNode('rect', at.x - 70, at.y - 28));
+      act('Add block here', '', () => addNode('rect', at));
       act('Paste here', 'Ctrl+V', () => pasteAt(at), hasClipboard());
-      sep();
+      hr();
       act('Select all', 'Ctrl+A', selectAll);
-      act('Fit to view', '', fitView);
+      act('Fit to view', 'Shift+1', () => fitView(true));
     }
-
-    // Measured after filling, then nudged back on-screen near the edges.
-    menu.classList.remove('hidden');
-    menu.style.left = '0px';
-    menu.style.top = '0px';
-    const r = menu.getBoundingClientRect();
-    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
-    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
+    popover.classList.add('hidden');
+    showFloat(menu, x, y);
   }
 
   // True while the Mermaid tab holds typing that hasn't reached the canvas.
@@ -487,7 +677,8 @@
     src.value = toMermaid(getModel());
     srcDirty = false;
     document.querySelectorAll('.pal-item.armed').forEach((n) => n.classList.remove('armed'));
-    refreshInspector();
+    refreshToolbar();
+    positionToolbar();
   }
 
   function onViewChanged() {
@@ -495,6 +686,31 @@
   }
 
   // --- Word ------------------------------------------------------------
+  //
+  // Every inserted picture gets a tag in its alt-text title. After an insert
+  // or an Open, "Update in document" finds that picture by its tag, so the
+  // round trip -- insert, keep editing, update -- works without having to
+  // re-select the picture in the document first.
+
+  const TAG_PREFIX = 'Mermaid diagram ';
+  let docTag = null;
+
+  function newTag() {
+    return TAG_PREFIX + Math.random().toString(36).slice(2, 8);
+  }
+
+  async function findTarget(context) {
+    const selected = context.document.getSelection().inlinePictures;
+    selected.load('items');
+    await context.sync();
+    if (selected.items.length) return { pic: selected.items[0], selected: true };
+    if (!docTag) return null;
+    const all = context.document.body.inlinePictures;
+    all.load('items/altTextTitle');
+    await context.sync();
+    const pic = all.items.find((p) => p.altTextTitle === docTag);
+    return pic ? { pic, selected: false } : null;
+  }
 
   async function insertOrReplace(mode) {
     // Inserting while the Mermaid tab has unapplied edits inserts those edits,
@@ -509,40 +725,48 @@
       catch (e) { setStatus('rasterize failed: ' + describeError(e), 'error'); return; }
 
       try {
-        let noSelection = false;
+        let outcome = null;
         await Word.run(async (context) => {
-          const range = context.document.getSelection();
           let pic;
-
+          let tag;
           if (mode === 'replace') {
-            const pics = range.inlinePictures;
-            pics.load('items');
-            await context.sync();
-            if (pics.items.length === 0) { noSelection = true; return; }
-            // Replace is the one place InsertLocation.replace is safe: the user
-            // deliberately selected a picture, and it swaps in place.
-            pic = range.insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace);
+            const target = await findTarget(context);
+            if (!target) { outcome = 'none'; return; }
+            // A selected picture is replaced through the selection range, the
+            // path proven to swap it in place; one found by its tag is
+            // replaced through the picture itself.
+            pic = target.selected
+              ? context.document.getSelection().insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace)
+              : target.pic.insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace);
+            tag = docTag || newTag();
+            outcome = 'updated';
           } else {
             // A diagram gets its own centred paragraph rather than landing
             // inline wherever the cursor happened to be sitting. Inserting into
             // an arbitrary text range is what made placement unpredictable.
+            const range = context.document.getSelection();
             const paragraph = range.paragraphs.getFirst().insertParagraph('', Word.InsertLocation.after);
             paragraph.alignment = Word.Alignment.centered;
             pic = paragraph.insertInlinePictureFromBase64(png.base64, Word.InsertLocation.end);
+            tag = newTag();
+            outcome = 'inserted';
           }
 
           pic.altTextDescription = toAltText(d);
+          pic.altTextTitle = tag;
           // The PNG already declares its DPI, so Word lays it out at this size
           // on its own. Setting it explicitly as well costs nothing and covers
           // a host that ignores the metadata.
           pic.width = png.widthPt;
           pic.height = png.heightPt;
           await context.sync();
+          docTag = tag;
         });
-        setStatus(
-          noSelection ? 'nothing selected to update -- click a diagram first'
-                      : (mode === 'replace' ? 'updated' : 'inserted'),
-          noSelection ? 'error' : 'success');
+        if (outcome === 'none') {
+          setStatus('nothing to update -- click the diagram in the document, or use Insert', 'error');
+        } else {
+          setStatus(outcome === 'updated' ? 'updated in the document' : 'inserted -- keep editing and press Update to refresh it', 'success');
+        }
       } catch (e) {
         setStatus('insert failed: ' + describeError(e), 'error');
       }
@@ -559,7 +783,7 @@
           if (pics.items.length === 0) { setStatus('click a diagram in the document first', 'error'); return; }
 
           const pic = pics.items[0];
-          pic.load('altTextDescription');
+          pic.load('altTextDescription,altTextTitle');
           await context.sync();
 
           const raw = pic.altTextDescription || '';
@@ -572,10 +796,15 @@
           catch (e) { setStatus('diagram source is corrupted, refusing to load: ' + e.message, 'error'); return; }
           if (!d.nodes.length) { setStatus('alt-text parsed but held no blocks', 'error'); return; }
 
+          // Pictures inserted before tagging existed get a tag now, so the
+          // Update after this Open can find them again.
+          if (pic.altTextTitle && pic.altTextTitle.startsWith(TAG_PREFIX)) docTag = pic.altTextTitle;
+          else { docTag = newTag(); pic.altTextTitle = docTag; await context.sync(); }
+
           setModel(d);
           onModelChanged();
           fitView();
-          setStatus('opened from the document', 'success');
+          setStatus('opened -- edit, then press Update in document', 'success');
         });
       } catch (e) {
         setStatus('load failed: ' + describeError(e), 'error');
@@ -594,18 +823,28 @@
     document.getElementById('mdPane').classList.toggle('hidden', canvas);
     document.getElementById('tabCanvas').classList.toggle('active', canvas);
     document.getElementById('tabMd').classList.toggle('active', !canvas);
-    closeMenu();
+    closeFloats();
   }
 
   buildPalette();
-  initEditor(document.getElementById('canvasHost'), onModelChanged, onViewChanged, openMenu);
+  initEditor(document.getElementById('canvasHost'), onModelChanged, onViewChanged, openMenu,
+             { onRender: positionToolbar, onPickShape: openPicker });
 
   // Capture phase, so it closes before whatever was clicked runs -- except
-  // clicks inside the menu itself.
+  // clicks inside the panel itself.
   document.addEventListener('pointerdown', (ev) => {
-    if (!menu.contains(ev.target)) closeMenu();
+    if (!menu.contains(ev.target) && !popover.contains(ev.target) && !picker.contains(ev.target) &&
+        !toolbar.contains(ev.target)) closeFloats();
+    else if (toolbar.contains(ev.target)) { menu.classList.add('hidden'); if (!ev.target.closest('button')) popover.classList.add('hidden'); }
   }, true);
-  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
+  window.addEventListener('keydown', (ev) => {
+    if (!picker.classList.contains('hidden')) {
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closePicker(null); }
+      else if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); closePicker(picker.dataset.suggested); }
+      return;
+    }
+    if (ev.key === 'Escape') { menu.classList.add('hidden'); popover.classList.add('hidden'); }
+  }, true);
 
   document.getElementById('tabCanvas').addEventListener('click', () => showTab('canvas'));
   document.getElementById('tabMd').addEventListener('click', () => showTab('md'));
@@ -621,6 +860,7 @@
 
   document.getElementById('newBtn').addEventListener('click', () => {
     setModel(newDiagram());
+    docTag = null;              // a fresh diagram isn't the one in the document
     onModelChanged();
     fitView();
     showTab('canvas');

@@ -16,6 +16,7 @@ const LABEL_PAD_X = 14;
 const LABEL_PAD_Y = 12;
 const CORNER_R = 8;
 const EXPORT_PAD = 24;
+const EDGE_COLOR = '#555555';
 // How far a connector runs straight out of a block before it is allowed to
 // turn. Without it, edges leaving adjacent ports would kink immediately and
 // read as one smudge rather than as separate signals.
@@ -25,13 +26,14 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const SVG_STYLE = `
   .wm-shape { fill: #ffffff; stroke: #333333; stroke-width: 1.5; }
+  .wm-solid { fill: #333333; }
   .wm-label { font-family: ${FONT_STACK}; font-size: ${DEFAULT_FONT_SIZE}px; fill: #111111;
               text-anchor: middle; dominant-baseline: middle; }
-  .wm-edge  { fill: none; stroke: #555555; stroke-width: ${DEFAULT_EDGE_W}; stroke-linejoin: round;
+  .wm-edge  { fill: none; stroke: ${EDGE_COLOR}; stroke-width: ${DEFAULT_EDGE_W}; stroke-linejoin: round;
               stroke-linecap: round; }
   .wm-edge-dotted { stroke-dasharray: 5 4; }
-  .wm-arrow { fill: #555555; stroke: none; }
-  .wm-edge-label { font-family: ${FONT_STACK}; font-size: 12px; fill: #333333;
+  .wm-arrow { fill: ${EDGE_COLOR}; stroke: none; }
+  .wm-edge-label { font-family: ${FONT_STACK}; font-size: ${DEFAULT_EDGE_FONT}px; fill: #333333;
                    text-anchor: middle; dominant-baseline: middle; }
   .wm-edge-label-bg { fill: #ffffff; stroke: none; }
   .wm-group { fill: #f4f6fb; stroke: #6b7fb3; stroke-width: 1.5; stroke-dasharray: 8 4; }
@@ -48,17 +50,18 @@ function el(tag, attrs, parent) {
 }
 
 // Text measurement via a 2D context -- synchronous, and matches what the SVG
-// will do closely enough for wrapping decisions.
+// will do closely enough for wrapping decisions. Bold is measured as bold:
+// it runs about 10% wider, which is the difference between fitting and not.
 let measureCtx = null;
-function textWidth(s, size) {
+function textWidth(s, size, bold) {
   if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
-  measureCtx.font = (size || DEFAULT_FONT_SIZE) + 'px ' + FONT_STACK;
+  measureCtx.font = (bold ? 'bold ' : '') + (size || DEFAULT_FONT_SIZE) + 'px ' + FONT_STACK;
   return measureCtx.measureText(s).width;
 }
 
 function lineH(size) { return Math.round((size || DEFAULT_FONT_SIZE) * 1.25); }
 
-function wrapLabel(label, maxWidth, size) {
+function wrapLabel(label, maxWidth, size, bold) {
   const out = [];
   for (const para of String(label || '').split('\n')) {
     const words = para.split(/\s+/).filter(Boolean);
@@ -66,7 +69,7 @@ function wrapLabel(label, maxWidth, size) {
     let line = words[0];
     for (let i = 1; i < words.length; i++) {
       const candidate = line + ' ' + words[i];
-      if (textWidth(candidate, size) <= maxWidth) line = candidate;
+      if (textWidth(candidate, size, bold) <= maxWidth) line = candidate;
       else { out.push(line); line = words[i]; }
     }
     out.push(line);
@@ -74,22 +77,43 @@ function wrapLabel(label, maxWidth, size) {
   return out;
 }
 
+// The part of a shape the label actually sits in. Most shapes centre it in
+// their box; the ones whose outline eats into the box shift it clear.
+function labelArea(n) {
+  const { x, y, w, h } = n;
+  if (n.shape === 'cylinder') { const r = Math.min(12, h / 4); return { x, y: y + r, w, h: h - r }; }
+  if (n.shape === 'document') { const a = Math.min(8, h * 0.15); return { x, y, w, h: h - a }; }
+  if (n.shape === 'stacked') return { x, y: y + 8, w: w - 8, h: h - 8 };
+  if (n.shape === 'queue') { const r = Math.min(12, w / 6); return { x, y, w: w - r * 1.5, h }; }
+  if (n.shape === 'buffer') return { x, y: y + h * 0.2, w: w * 0.65, h: h * 0.6 };
+  return n;
+}
+
 // Grows a node to fit its label. Never shrinks below what the user dragged it
 // to -- resizing is theirs to control, this only prevents clipped text.
 function fitNodeSize(n) {
+  if (LABELLESS.has(n.shape)) return;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
-  const lines = wrapLabel(n.label, Math.max(60, n.w - LABEL_PAD_X * 2), size);
-  const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size)), 0)) + LABEL_PAD_X * 2;
-  const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2;
+  const area = labelArea(n);
+  // Extra room the shape's own outline takes out of the box, added back on.
+  const slackW = n.w - area.w;
+  const slackH = n.h - area.h;
+  const lines = wrapLabel(n.label, Math.max(60, area.w - LABEL_PAD_X * 2), size, n.bold);
+  const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size, n.bold)), 0)) + LABEL_PAD_X * 2 + slackW;
+  const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2 + slackH;
   n.w = Math.max(n.w, needW, 60);
   n.h = Math.max(n.h, needH, 36);
 }
 
+// Returns the shape's elements in drawing order. Anything marked data-line is
+// detail linework (a cylinder's rim, a subroutine's bars) and is never filled;
+// everything else takes the node's fill.
 function shapeElement(n) {
   const { x, y, w, h } = n;
   const cx = x + w / 2;
   const cy = y + h / 2;
   const slant = Math.min(20, w * 0.2);
+  const line = (d) => el('path', { d, class: 'wm-shape', 'data-line': '1' });
   switch (n.shape) {
     case 'round':
       return [el('rect', { x, y, width: w, height: h, rx: 12, class: 'wm-shape' })];
@@ -98,7 +122,7 @@ function shapeElement(n) {
     case 'subroutine':
       return [
         el('rect', { x, y, width: w, height: h, class: 'wm-shape' }),
-        el('path', { d: `M${x + 8} ${y}V${y + h}M${x + w - 8} ${y}V${y + h}`, class: 'wm-shape' }),
+        line(`M${x + 8} ${y}V${y + h}M${x + w - 8} ${y}V${y + h}`),
       ];
     case 'cylinder': {
       const ry = Math.min(12, h / 4);
@@ -108,7 +132,7 @@ function shapeElement(n) {
              `V${y + h - ry}A${w / 2} ${ry} 0 0 1 ${x} ${y + h - ry}Z`,
           class: 'wm-shape',
         }),
-        el('path', { d: `M${x} ${y + ry}A${w / 2} ${ry} 0 0 0 ${x + w} ${y + ry}`, class: 'wm-shape' }),
+        line(`M${x} ${y + ry}A${w / 2} ${ry} 0 0 0 ${x + w} ${y + ry}`),
       ];
     }
     case 'circle':
@@ -116,7 +140,7 @@ function shapeElement(n) {
     case 'doublecircle':
       return [
         el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape' }),
-        el('ellipse', { cx, cy, rx: w / 2 - 5, ry: h / 2 - 5, class: 'wm-shape' }),
+        el('ellipse', { cx, cy, rx: Math.max(1, w / 2 - 5), ry: Math.max(1, h / 2 - 5), class: 'wm-shape', 'data-line': '1' }),
       ];
     case 'diamond':
       return [el('polygon', {
@@ -150,6 +174,54 @@ function shapeElement(n) {
       return [el('path', {
         d: `M${x} ${y}Q${x + slant} ${cy} ${x} ${y + h}H${x + w}V${y}Z`, class: 'wm-shape',
       })];
+    case 'document': {
+      const a = Math.min(8, h * 0.15);
+      return [el('path', {
+        d: `M${x} ${y}H${x + w}V${y + h - a}` +
+           `C${x + w * 0.75} ${y + h - a * 3} ${x + w * 0.25} ${y + h + a} ${x} ${y + h - a}Z`,
+        class: 'wm-shape',
+      })];
+    }
+    // Two copies peeking out behind the front one: N of the same thing.
+    case 'stacked':
+      return [
+        el('rect', { x: x + 8, y, width: w - 8, height: h - 8, class: 'wm-shape' }),
+        el('rect', { x: x + 4, y: y + 4, width: w - 8, height: h - 8, class: 'wm-shape' }),
+        el('rect', { x, y: y + 8, width: w - 8, height: h - 8, class: 'wm-shape' }),
+      ];
+    // A cylinder on its side: the conventional FIFO / queue.
+    case 'queue': {
+      const r = Math.min(12, w / 6);
+      return [
+        el('path', {
+          d: `M${x + r} ${y}H${x + w - r}A${r} ${h / 2} 0 0 1 ${x + w - r} ${y + h}` +
+             `H${x + r}A${r} ${h / 2} 0 0 1 ${x + r} ${y}Z`,
+          class: 'wm-shape',
+        }),
+        line(`M${x + w - r} ${y}A${r} ${h / 2} 0 0 0 ${x + w - r} ${y + h}`),
+      ];
+    }
+    // Points right, the way a buffer / driver / amplifier is drawn.
+    case 'buffer':
+      return [el('polygon', { points: `${x},${y} ${x + w},${cy} ${x},${y + h}`, class: 'wm-shape' })];
+    case 'delay': {
+      const r = Math.min(h / 2, w / 2);
+      return [el('path', {
+        d: `M${x} ${y}H${x + w - r}A${r} ${h / 2} 0 0 1 ${x + w - r} ${y + h}H${x}Z`, class: 'wm-shape',
+      })];
+    }
+    case 'junction':
+      return [el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape wm-solid' })];
+    case 'sum': {
+      const dx = (w / 2) * 0.707;
+      const dy = (h / 2) * 0.707;
+      return [
+        el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape' }),
+        line(`M${cx - dx} ${cy - dy}L${cx + dx} ${cy + dy}M${cx + dx} ${cy - dy}L${cx - dx} ${cy + dy}`),
+      ];
+    }
+    case 'bar':
+      return [el('rect', { x, y, width: w, height: h, rx: Math.min(2, w / 2), class: 'wm-shape wm-solid' })];
     case 'text':
       return [];
     default:
@@ -157,28 +229,29 @@ function shapeElement(n) {
   }
 }
 
+// Written as inline style, not as attributes: a presentation attribute loses to
+// the class rules, so an attribute here would silently do nothing.
+function labelText(parent, lines, cx, cy, size, bold, cls, defaultSize) {
+  const lh = lineH(size);
+  const text = el('text', { x: cx, y: cy - ((lines.length - 1) * lh) / 2, class: cls }, parent);
+  if (size !== defaultSize) text.style.fontSize = size + 'px';
+  if (bold) text.style.fontWeight = 'bold';
+  lines.forEach((l, i) => { el('tspan', { x: cx, dy: i === 0 ? 0 : lh }, text).textContent = l; });
+  return text;
+}
+
 function drawNode(parent, n) {
   const g = el('g', { 'data-id': n.id, 'data-kind': 'node' }, parent);
-  // Written as inline style, not as a fill attribute: a presentation attribute
-  // loses to the .wm-shape class rule, so an attribute here would silently do
-  // nothing. Only the first element is the body; anything after it is detail
-  // linework (the cylinder's rim, the subroutine's side bars) and stays unfilled.
-  shapeElement(n).forEach((shape, i) => {
-    if (i === 0) { if (n.fill && n.fill !== '#ffffff') shape.style.fill = n.fill; }
-    else shape.style.fill = 'none';
+  for (const shape of shapeElement(n)) {
+    if (shape.getAttribute('data-line')) shape.style.fill = 'none';
+    else if (n.fill && n.fill !== '#ffffff') shape.style.fill = n.fill;
     g.appendChild(shape);
-  });
+  }
+  if (LABELLESS.has(n.shape)) return g;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
-  const lh = lineH(size);
-  const lines = wrapLabel(n.label, n.w - LABEL_PAD_X * 2, size);
-  // A cylinder's rim cuts across the middle of the box, so its label sits below it.
-  const shift = n.shape === 'cylinder' ? Math.min(12, n.h / 4) * 0.75 : 0;
-  const startY = n.y + n.h / 2 + shift - ((lines.length - 1) * lh) / 2;
-  const text = el('text', { x: n.x + n.w / 2, y: startY, class: 'wm-label' }, g);
-  if (size !== DEFAULT_FONT_SIZE) text.style.fontSize = size + 'px';
-  lines.forEach((line, i) => {
-    el('tspan', { x: n.x + n.w / 2, dy: i === 0 ? 0 : lh }, text).textContent = line;
-  });
+  const area = labelArea(n);
+  const lines = wrapLabel(n.label, area.w - LABEL_PAD_X * 2, size, n.bold);
+  labelText(g, lines, area.x + area.w / 2, area.y + area.h / 2, size, n.bold, 'wm-label', DEFAULT_FONT_SIZE);
   return g;
 }
 
@@ -187,11 +260,12 @@ function drawNode(parent, n) {
 function drawGroup(parent, g) {
   const node = el('g', { 'data-id': g.id, 'data-kind': 'group' }, parent);
   el('rect', { x: g.x, y: g.y, width: g.w, height: g.h, rx: 8, class: 'wm-group' }, node);
-  const tabW = Math.min(g.w, textWidth(g.label, 12) + 20);
-  el('rect', { x: g.x, y: g.y, width: tabW, height: GROUP_TITLE_H, rx: 6, class: 'wm-group-tab' }, node);
+  el('rect', { x: g.x, y: g.y, width: groupTabWidth(g), height: GROUP_TITLE_H, rx: 6, class: 'wm-group-tab' }, node);
   el('text', { x: g.x + 10, y: g.y + GROUP_TITLE_H / 2, class: 'wm-group-title' }, node).textContent = g.label;
   return node;
 }
+
+function groupTabWidth(g) { return Math.min(g.w, textWidth(g.label, 12, true) + 20); }
 
 // --- edge routing -------------------------------------------------------
 //
@@ -322,7 +396,26 @@ function edgeRoutes(d) {
     // cross each other on the way out.
     const axis = list[0].side === 'n' || list[0].side === 's' ? 'x' : 'y';
     list.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis]);
-    list.forEach((end, i) => { end.t = (i + 1) / (list.length + 1); });
+    list.forEach((end, i) => { end.t = (i + 1) / (list.length + 1); end.solo = list.length === 1; });
+  }
+
+  // Two blocks facing each other with some overlap get a dead straight
+  // connector through the middle of that overlap, instead of centre-to-centre
+  // with a tiny kink because their centres are two pixels apart. Only when
+  // both ends are automatic and alone on their side -- a pinned port or a fan
+  // takes precedence.
+  for (const s of slots) {
+    if (!s || s.self || !s.from.solo || !s.to.solo) continue;
+    const horiz = (s.from.side === 'e' && s.to.side === 'w') || (s.from.side === 'w' && s.to.side === 'e');
+    const vert = (s.from.side === 's' && s.to.side === 'n') || (s.from.side === 'n' && s.to.side === 's');
+    if (!horiz && !vert) continue;
+    const [pos, len] = horiz ? ['y', 'h'] : ['x', 'w'];
+    const lo = Math.max(s.a[pos], s.b[pos]);
+    const hi = Math.min(s.a[pos] + s.a[len], s.b[pos] + s.b[len]);
+    if (hi - lo < 8) continue;
+    const mid = (lo + hi) / 2;
+    s.from.t = (mid - s.a[pos]) / s.a[len];
+    s.to.t = (mid - s.b[pos]) / s.b[len];
   }
 
   return slots.map((s, i) => {
@@ -364,6 +457,12 @@ function roundedPathD(pts, r) {
   return d + `L${last.x} ${last.y}`;
 }
 
+// Arrowheads grow with the line, or a bus-width connector ends in a pinprick.
+function arrowSize(e) {
+  const w = e.width || DEFAULT_EDGE_W;
+  return { len: 7 + w * 2, half: 3 + w * 1.1 };
+}
+
 function arrowHeadD(tip, from, len, half) {
   const dist = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
   const ux = (tip.x - from.x) / dist;
@@ -401,40 +500,51 @@ function longestSegmentMidpoint(pts) {
   return { x: (pts[best].x + pts[best - 1].x) / 2, y: (pts[best].y + pts[best - 1].y) / 2 };
 }
 
+// Where an edge's label box sits, with its lines. Shared by drawing, the export
+// bounds and the editor, so the label is never cropped or mis-hit.
+function edgeLabelBox(e, pts) {
+  const size = e.fontSize || DEFAULT_EDGE_FONT;
+  const lines = String(e.label).split('\n');
+  const mid = longestSegmentMidpoint(pts);
+  const w = Math.max(...lines.map((l) => textWidth(l, size, e.bold))) + 10;
+  const h = lines.length * lineH(size) + 4;
+  return { x: mid.x - w / 2, y: mid.y - h / 2, w, h, mid, lines, size };
+}
+
 function drawEdge(parent, e, pts, index) {
   const g = el('g', { 'data-index': index, 'data-kind': 'edge' }, parent);
   // Two blocks dropped exactly on top of each other collapse the route to a
   // single point; there is nothing to draw and an arrowhead needs two.
   if (pts.length < 2) return g;
   const w = e.width || DEFAULT_EDGE_W;
-  // Arrowheads grow with the line, or a bus-width connector ends in a pinprick.
-  const headLen = 7 + w * 2;
-  const headHalf = 3 + w * 1.1;
-  const hasEndArrow = e.style !== 'line';
-  const hasStartArrow = e.style === 'bidir';
+  const { len, half } = arrowSize(e);
+  const endHead = e.head === 'end' || e.head === 'both';
+  const startHead = e.head === 'both';
 
   let linePts = pts;
-  if (hasEndArrow) linePts = trimEnd(linePts, headLen - 1);
-  if (hasStartArrow) linePts = trimEnd(linePts.slice().reverse(), headLen - 1).reverse();
+  if (endHead) linePts = trimEnd(linePts, len - 1);
+  if (startHead) linePts = trimEnd(linePts.slice().reverse(), len - 1).reverse();
 
   const path = el('path', {
     d: roundedPathD(linePts, CORNER_R),
-    class: e.style === 'dotted' ? 'wm-edge wm-edge-dotted' : 'wm-edge',
+    class: e.dash === 'dotted' ? 'wm-edge wm-edge-dotted' : 'wm-edge',
   }, g);
   if (w !== DEFAULT_EDGE_W) path.style.strokeWidth = w;
+  if (e.color) path.style.stroke = e.color;
 
-  if (hasEndArrow) {
-    el('path', { d: arrowHeadD(pts[pts.length - 1], pts[pts.length - 2], headLen, headHalf), class: 'wm-arrow' }, g);
-  }
-  if (hasStartArrow) {
-    el('path', { d: arrowHeadD(pts[0], pts[1], headLen, headHalf), class: 'wm-arrow' }, g);
+  const heads = [];
+  if (endHead) heads.push(arrowHeadD(pts[pts.length - 1], pts[pts.length - 2], len, half));
+  if (startHead) heads.push(arrowHeadD(pts[0], pts[1], len, half));
+  for (const d of heads) {
+    const head = el('path', { d, class: 'wm-arrow' }, g);
+    if (e.color) head.style.fill = e.color;
   }
 
   if (e.label) {
-    const mid = longestSegmentMidpoint(pts);
-    const lw = textWidth(e.label, 12) + 10;
-    el('rect', { x: mid.x - lw / 2, y: mid.y - 9, width: lw, height: 18, class: 'wm-edge-label-bg' }, g);
-    el('text', { x: mid.x, y: mid.y, class: 'wm-edge-label' }, g).textContent = e.label;
+    const box = edgeLabelBox(e, pts);
+    el('rect', { x: box.x, y: box.y, width: box.w, height: box.h, class: 'wm-edge-label-bg' }, g);
+    const text = labelText(g, box.lines, box.mid.x, box.mid.y, box.size, e.bold, 'wm-edge-label', DEFAULT_EDGE_FONT);
+    if (e.color) text.style.fill = e.color;
   }
   return g;
 }
@@ -451,16 +561,27 @@ function drawDiagram(parent, d) {
   for (const n of d.nodes) drawNode(nodeLayer, n);
 }
 
+// Everything that gets drawn, not just the blocks: connectors can run outside
+// the outermost blocks (their stubs, a dragged path, a self-loop) and a label
+// can hang past its connector. Bounding only the blocks is what cropped
+// connectors off the edges of the inserted picture.
 function diagramBounds(d) {
-  const boxes = d.nodes.concat(d.groups.filter((g) => g.w > 0));
-  if (!boxes.length) return { x: 0, y: 0, w: 1, h: 1 };
-  const x0 = Math.min(...boxes.map((b) => b.x));
-  const y0 = Math.min(...boxes.map((b) => b.y));
-  const x1 = Math.max(...boxes.map((b) => b.x + b.w));
-  const y1 = Math.max(...boxes.map((b) => b.y + b.h));
-  // Self-loops bulge to the right of their node; give them room.
-  const loopPad = d.edges.some((e) => e.from === e.to) ? 40 : 0;
-  return { x: x0, y: y0, w: x1 - x0 + loopPad, h: y1 - y0 };
+  const xs = [];
+  const ys = [];
+  const add = (x0, y0, x1, y1) => { xs.push(x0, x1); ys.push(y0, y1); };
+  for (const b of d.nodes.concat(d.groups.filter((g) => g.w > 0))) add(b.x, b.y, b.x + b.w, b.y + b.h);
+  edgeGeometry(d).forEach((pts, i) => {
+    if (!pts || pts.length < 2) return;
+    const e = d.edges[i];
+    // Half the stroke, or the arrowhead's half-width where that's wider.
+    const m = Math.max((e.width || DEFAULT_EDGE_W) / 2, e.head === 'none' ? 0 : arrowSize(e).half) + 1;
+    for (const p of pts) add(p.x - m, p.y - m, p.x + m, p.y + m);
+    if (e.label) { const b = edgeLabelBox(e, pts); add(b.x, b.y, b.x + b.w, b.y + b.h); }
+  });
+  if (!xs.length) return { x: 0, y: 0, w: 1, h: 1 };
+  const x0 = Math.min(...xs);
+  const y0 = Math.min(...ys);
+  return { x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 };
 }
 
 // Standalone, self-contained SVG for rasterization. Explicit width/height on

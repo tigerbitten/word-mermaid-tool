@@ -1,8 +1,10 @@
 // The diagram model, and Mermaid text in/out.
 //
 // A diagram is a plain object:
-//   { direction, nodes: [{id,label,shape,x,y,w,h,fill,fontSize}],
-//     edges: [{from,to,label,style,width,fromAnchor,toAnchor,points}],
+//   { direction,
+//     nodes: [{id,label,shape,x,y,w,h,fill,fontSize,bold}],
+//     edges: [{from,to,label,dash,head,width,color,fontSize,bold,
+//              fromAnchor,toAnchor,points}],
 //     groups: [{id,label,members:[nodeId],x,y,w,h}] }
 //
 // Nodes carry their own geometry because the canvas is the source of truth --
@@ -10,6 +12,9 @@
 // lines, so the saved text stays a valid Mermaid document that renders
 // anywhere and reads natively to an LLM.
 
+// Shapes with a classic bracket form are written that way -- it is the syntax
+// LLMs have seen most. The rest use Mermaid 11's `id@{ shape: ... }` form,
+// which is the only way standard Mermaid can express them.
 const SHAPES = {
   rect:              { open: '[',   close: ']'   },
   round:             { open: '(',   close: ')'   },
@@ -26,13 +31,50 @@ const SHAPES = {
   trapezoid_alt:     { open: '[\\', close: '/]'  },
   flag:              { open: '>',   close: ']'   },
   text:              { open: '[',   close: ']'   }, // borderless; marked by its style line
+  document:          { v11: 'doc' },
+  stacked:           { v11: 'st-rect' },
+  queue:             { v11: 'h-cyl' },
+  buffer:            { v11: 'tri' },
+  delay:             { v11: 'delay' },
+  junction:          { v11: 'sm-circ' },
+  sum:               { v11: 'cross-circ' },
+  bar:               { v11: 'fork' },
 };
 
-// Arrowhead and line character, independent of thickness. Thickness is its own
-// property because "dotted" and "heavy" are orthogonal questions -- a control
-// signal can be either. The `==` forms below carry thickness through to other
-// Mermaid renderers, and `linkStyle` carries the exact value.
-const EDGE_STYLES = { arrow: '-->', line: '---', thick: '==>', dotted: '-.->', bidir: '<-->' };
+// Every name Mermaid 11 accepts in `@{ shape: ... }` for a shape we draw,
+// aliases included, since an LLM may write any of them.
+const V11_NAMES = {
+  rect: ['rect', 'rectangle', 'proc', 'process'],
+  round: ['rounded', 'event'],
+  stadium: ['stadium', 'pill', 'terminal'],
+  subroutine: ['subproc', 'subprocess', 'subroutine', 'fr-rect', 'framed-rectangle'],
+  cylinder: ['cyl', 'cylinder', 'database', 'db'],
+  circle: ['circle', 'circ'],
+  doublecircle: ['dbl-circ', 'double-circle'],
+  diamond: ['diam', 'diamond', 'decision'],
+  hexagon: ['hex', 'hexagon', 'prepare'],
+  parallelogram: ['lean-r', 'lean-right', 'in-out'],
+  parallelogram_alt: ['lean-l', 'lean-left', 'out-in'],
+  trapezoid: ['trap-b', 'trapezoid-bottom', 'priority'],
+  trapezoid_alt: ['trap-t', 'trapezoid-top', 'manual'],
+  flag: ['flag', 'paper-tape'],
+  text: ['text'],
+  document: ['doc', 'document'],
+  stacked: ['st-rect', 'processes', 'procs', 'stacked-rectangle'],
+  queue: ['h-cyl', 'das', 'horizontal-cylinder'],
+  buffer: ['tri', 'extract', 'triangle'],
+  delay: ['delay', 'half-rounded-rectangle'],
+  junction: ['sm-circ', 'small-circle', 'start'],
+  sum: ['cross-circ', 'summary', 'crossed-circle'],
+  bar: ['fork', 'join'],
+};
+const SHAPE_BY_V11 = {};
+for (const shape in V11_NAMES) for (const name of V11_NAMES[shape]) SHAPE_BY_V11[name] = shape;
+
+// Wiring symbols carry no text: a junction dot, a summing node, a bus bar.
+// They get their own natural size instead of a text box's.
+const LABELLESS = new Set(['junction', 'sum', 'bar']);
+const SHAPE_SIZE = { junction: [14, 14], sum: [40, 40], bar: [10, 80] };
 
 const LAYOUT_HEADER = '%% --- layout (word-mermaid-tool v1; safe to ignore) ---';
 const FENCE_OPEN = '```mermaid';
@@ -41,9 +83,19 @@ const DEFAULT_W = 140;
 const DEFAULT_H = 56;
 const DEFAULT_FONT_SIZE = 13;
 const DEFAULT_EDGE_W = 1.5;
+const DEFAULT_EDGE_FONT = 12;
 
 function newDiagram() {
   return { direction: 'LR', nodes: [], edges: [], groups: [] };
+}
+
+function newEdge(from, to) {
+  return { from, to, label: '', dash: 'solid', head: 'end', width: DEFAULT_EDGE_W, color: null,
+           fontSize: DEFAULT_EDGE_FONT, bold: false, fromAnchor: null, toAnchor: null, points: null };
+}
+
+function defaultSize(shape) {
+  return SHAPE_SIZE[shape] || [DEFAULT_W, DEFAULT_H];
 }
 
 function nodeById(d, id) {
@@ -63,12 +115,17 @@ function makeId(label, taken) {
   return id;
 }
 
-// `"` and `#` both have meaning inside a Mermaid label, and a literal newline
-// would end the statement.
+// Everything with a meaning inside a Mermaid label is written as an entity: `"`
+// ends the string, `|` ends an edge label, `#` starts an entity, `<`/`>` would
+// read as HTML (a literal "<br/>" typed into a label must stay text), and a
+// raw newline would end the statement.
 function quoteLabel(text) {
   const escaped = String(text == null ? '' : text)
     .replace(/#/g, '#35;')
     .replace(/"/g, '#quot;')
+    .replace(/\|/g, '#124;')
+    .replace(/</g, '#lt;')
+    .replace(/>/g, '#gt;')
     .replace(/\r?\n/g, '<br/>');
   return '"' + escaped + '"';
 }
@@ -79,22 +136,28 @@ function unquoteLabel(raw) {
   return s
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/#quot;/g, '"')
+    .replace(/#124;/g, '|')
+    .replace(/#lt;/g, '<')
+    .replace(/#gt;/g, '>')
     .replace(/#35;/g, '#');
 }
 
 function nodeDecl(n) {
   const s = SHAPES[n.shape] || SHAPES.rect;
+  if (s.v11) {
+    return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
+  }
   return n.id + s.open + quoteLabel(n.label) + s.close;
 }
 
-// A heavy edge is written with Mermaid's `==` form so thickness survives in
-// other renderers too; `linkStyle` below pins down the exact width.
+// Dash and arrowheads map straight onto Mermaid's link syntax. A heavy edge is
+// written with the `==` form so thickness survives in other renderers too;
+// `linkStyle` pins down the exact width. A dotted link has no heavy form.
 function linkToken(e) {
   const heavy = (e.width || DEFAULT_EDGE_W) >= 3;
-  if (e.style === 'dotted') return '-.->';
-  if (e.style === 'bidir') return heavy ? '<==>' : '<-->';
-  if (e.style === 'line') return heavy ? '===' : '---';
-  return heavy ? '==>' : '-->';
+  if (e.dash === 'dotted') return e.head === 'none' ? '-.-' : e.head === 'both' ? '<-.->' : '-.->';
+  if (heavy) return e.head === 'none' ? '===' : e.head === 'both' ? '<==>' : '==>';
+  return e.head === 'none' ? '---' : e.head === 'both' ? '<-->' : '-->';
 }
 
 function edgeDecl(e) {
@@ -103,14 +166,25 @@ function edgeDecl(e) {
 }
 
 // Only emitted when it carries information: a borderless text label, a
-// non-default fill, or a non-default text size. All standard Mermaid `style`
+// non-default fill, text size or weight. All standard Mermaid `style`
 // statements, so they survive a round-trip through any other Mermaid tool.
 function styleDecl(n) {
   const parts = [];
   if (n.shape === 'text') parts.push('fill:none', 'stroke:none');
   else if (n.fill && n.fill !== '#ffffff') parts.push('fill:' + n.fill, 'stroke:#333');
   if (n.fontSize && n.fontSize !== DEFAULT_FONT_SIZE) parts.push('font-size:' + n.fontSize + 'px');
+  if (n.bold) parts.push('font-weight:bold');
   return parts.length ? 'style ' + n.id + ' ' + parts.join(',') : null;
+}
+
+function linkStyleDecl(e, i) {
+  const parts = [];
+  const w = e.width || DEFAULT_EDGE_W;
+  if (w !== DEFAULT_EDGE_W) parts.push('stroke-width:' + w + 'px');
+  if (e.color) parts.push('stroke:' + e.color, 'color:' + e.color);
+  if (e.fontSize && e.fontSize !== DEFAULT_EDGE_FONT) parts.push('font-size:' + e.fontSize + 'px');
+  if (e.bold) parts.push('font-weight:bold');
+  return parts.length ? 'linkStyle ' + i + ' ' + parts.join(',') : null;
 }
 
 function layoutLine(item) {
@@ -151,8 +225,8 @@ function toMermaid(d) {
     if (s) lines.push('  ' + s);
   }
   d.edges.forEach((e, i) => {
-    const w = e.width || DEFAULT_EDGE_W;
-    if (w !== DEFAULT_EDGE_W) lines.push('  linkStyle ' + i + ' stroke-width:' + w + 'px');
+    const s = linkStyleDecl(e, i);
+    if (s) lines.push('  ' + s);
   });
 
   // Only nodes are recorded. A group's box is always derived from its members,
@@ -186,7 +260,7 @@ function looksLikeOurAltText(raw) {
 }
 
 function stripFence(raw) {
-  const lines = String(raw).replace(/\r\n/g, '\n').split('\n');
+  const lines = String(raw).replace(/\r\n?/g, '\n').split('\n');
   if (lines.length && lines[0].trim().startsWith('```')) lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   if (lines.length && lines[lines.length - 1].trim() === '```') lines.pop();
@@ -226,16 +300,44 @@ const BRACKETS = [
 const LINK_RE = /^\s*(<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|([^|]*)\|\s*)?/;
 
 function linkFromToken(token) {
-  const style = token.includes('.') ? 'dotted'
-    : token.startsWith('<') ? 'bidir'
-    : /[>ox]$/.test(token) ? 'arrow' : 'line';
-  return { style, width: token.includes('=') ? 3.5 : DEFAULT_EDGE_W };
+  return {
+    dash: token.includes('.') ? 'dotted' : 'solid',
+    head: token.startsWith('<') ? 'both' : /[>ox]$/.test(token) ? 'end' : 'none',
+    width: token.includes('=') ? 3.5 : DEFAULT_EDGE_W,
+  };
 }
 
-// Reads one `ID` optionally followed by a shape bracket. Bracket contents are
-// scanned by hand rather than by regex because labels legitimately contain
-// brackets of their own. `-` is deliberately not an id character: without that,
-// the extremely common `A-->B` reads as a node called `A--`.
+// Index just past the closing quote of a string opening at `i`.
+function skipQuoted(s, i) {
+  const end = s.indexOf('"', i + 1);
+  return end === -1 ? s.length : end + 1;
+}
+
+// `shape: doc, label: "Hi, there"` -> { shape: 'doc', label: 'Hi, there' }.
+// Commas inside quotes are part of the value.
+function readProps(body) {
+  const props = {};
+  let i = 0;
+  while (i < body.length) {
+    const colon = body.indexOf(':', i);
+    if (colon === -1) break;
+    const key = body.slice(i, colon).replace(/[\s,]/g, '');
+    let j = colon + 1;
+    while (j < body.length && /\s/.test(body[j])) j++;
+    let value;
+    if (body[j] === '"') { const end = skipQuoted(body, j); value = body.slice(j, end); j = end; }
+    else { const end = body.indexOf(',', j); value = body.slice(j, end === -1 ? body.length : end).trim(); j = end === -1 ? body.length : end; }
+    props[key] = value;
+    i = j + 1;
+  }
+  return props;
+}
+
+// Reads one `ID` optionally followed by a shape. Labels are scanned by hand,
+// quote-aware, because hardware labels are full of brackets -- `addr[31:0]`
+// inside `A["addr[31:0]"]` must not end the node at its first `]`. `-` is
+// deliberately not an id character: without that, the extremely common `A-->B`
+// reads as a node called `A--`.
 function readNodeRef(s, i) {
   while (i < s.length && /\s/.test(s[i])) i++;
   const start = i;
@@ -243,12 +345,22 @@ function readNodeRef(s, i) {
   if (i === start) return null;
   const id = s.slice(start, i);
 
+  if (s.startsWith('@{', i)) {
+    let j = i + 2;
+    while (j < s.length && s[j] !== '}') j = s[j] === '"' ? skipQuoted(s, j) : j + 1;
+    const props = readProps(s.slice(i + 2, j));
+    return { id, shape: SHAPE_BY_V11[props.shape] || 'rect',
+             label: props.label != null ? unquoteLabel(props.label) : null, next: Math.min(j + 1, s.length) };
+  }
+
   for (const [open, close, shape] of BRACKETS) {
-    if (s.startsWith(open, i)) {
-      const end = s.indexOf(close, i + open.length);
-      if (end === -1) continue;
-      return { id, shape, label: unquoteLabel(s.slice(i + open.length, end)), next: end + close.length };
-    }
+    if (!s.startsWith(open, i)) continue;
+    let from = i + open.length;
+    while (from < s.length && s[from] === ' ') from++;
+    if (s[from] === '"') from = skipQuoted(s, from);
+    const end = s.indexOf(close, from);
+    if (end === -1) continue;
+    return { id, shape, label: unquoteLabel(s.slice(i + open.length, end)), next: end + close.length };
   }
   return { id, shape: null, label: null, next: i };
 }
@@ -272,7 +384,7 @@ function parseMermaid(text) {
   const layout = {};
   const anchors = {};
   const paths = {};
-  const widths = {};
+  const linkStyles = {};
   const styles = {};
   let groupStack = [];
   let sawHeader = false;
@@ -280,9 +392,10 @@ function parseMermaid(text) {
   const ensureNode = (ref) => {
     let n = nodeById(d, ref.id);
     if (!n) {
-      n = { id: ref.id, label: ref.label != null ? ref.label : ref.id,
-            shape: ref.shape || 'rect', x: 0, y: 0, w: DEFAULT_W, h: DEFAULT_H,
-            fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE };
+      const shape = ref.shape || 'rect';
+      const [w, h] = defaultSize(shape);
+      n = { id: ref.id, label: ref.label != null ? ref.label : (LABELLESS.has(shape) ? '' : ref.id),
+            shape, x: 0, y: 0, w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: false };
       d.nodes.push(n);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
@@ -318,7 +431,7 @@ function parseMermaid(text) {
     }
     if (line.startsWith('%%')) continue;
 
-    const header = line.match(/^(?:flowchart|graph)(?:\s+(TD|TB|LR|RL|BT))?\s*$/i);
+    const header = line.match(/^(?:flowchart|graph)(?:\s+(TD|TB|LR|RL|BT))?\s*;?$/i);
     if (header) {
       sawHeader = true;
       const dir = (header[1] || 'TD').toUpperCase();
@@ -344,11 +457,10 @@ function parseMermaid(text) {
     if (style) { styles[style[1]] = style[2]; continue; }
 
     // Consumed whatever it says, including `linkStyle default ...`, which
-    // carries no width we can use but must not be read as a block.
+    // names no particular edge but must not be read as a block.
     if (/^linkStyle\b/.test(line)) {
-      const linkStyle = line.match(/^linkStyle\s+([\d,\s]+?)\s+(.*)$/);
-      const w = linkStyle && linkStyle[2].match(/stroke-width:\s*([\d.]+)/);
-      if (w) linkStyle[1].split(',').forEach((i) => { widths[+i.trim()] = +w[1]; });
+      const ls = line.match(/^linkStyle\s+([\d,\s]+?)\s+(.*)$/);
+      if (ls) ls[1].split(',').forEach((i) => { linkStyles[+i.trim()] = ls[2]; });
       continue;
     }
 
@@ -368,13 +480,9 @@ function parseMermaid(text) {
       if (!next) break;
       i = next.next;
       const target = ensureNode(next);
-      const kind = linkFromToken(link[1]);
-      d.edges.push({
-        from: prev.id, to: target.id,
-        label: link[2] ? unquoteLabel(link[2]) : '',
-        style: kind.style, width: kind.width,
-        fromAnchor: null, toAnchor: null, points: null,
-      });
+      const e = Object.assign(newEdge(prev.id, target.id), linkFromToken(link[1]));
+      e.label = link[2] ? unquoteLabel(link[2]) : '';
+      d.edges.push(e);
       prev = target;
     }
   }
@@ -391,9 +499,17 @@ function parseMermaid(text) {
     if (fill) n.fill = fill[1];
     const size = decl.match(/font-size:\s*([\d.]+)/);
     if (size) n.fontSize = +size[1];
+    if (/font-weight:\s*(bold|[6-9]00)/.test(decl)) n.bold = true;
   }
   d.edges.forEach((e, i) => {
-    if (widths[i]) e.width = widths[i];
+    const decl = linkStyles[i] || '';
+    const w = decl.match(/stroke-width:\s*([\d.]+)/);
+    if (w) e.width = +w[1];
+    const color = decl.match(/(?:^|,)\s*stroke:\s*(#[0-9a-fA-F]{3,8})/);
+    if (color) e.color = color[1];
+    const size = decl.match(/font-size:\s*([\d.]+)/);
+    if (size) e.fontSize = +size[1];
+    if (/font-weight:\s*(bold|[6-9]00)/.test(decl)) e.bold = true;
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
     if (paths[i]) e.points = paths[i];
   });
