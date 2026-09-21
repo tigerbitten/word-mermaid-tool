@@ -102,12 +102,17 @@ function nodeById(d, id) {
   return d.nodes.find((n) => n.id === id) || null;
 }
 
+// Words Mermaid's grammar claims. A node called `end` in particular ends the
+// enclosing subgraph and breaks the whole diagram in every Mermaid renderer.
+const RESERVED_IDS = new Set(['end', 'subgraph', 'graph', 'flowchart', 'style', 'linkstyle',
+  'classdef', 'class', 'click', 'direction', 'call', 'href', 'default']);
+
 // Mermaid ids must be identifier-ish. Derived from the label once at creation
 // and then frozen -- renaming a node must not churn every edge that refers to
 // it, and must not break the saved text.
 function makeId(label, taken) {
   let base = String(label || '').replace(/[^A-Za-z0-9_]/g, '');
-  if (!base || /^[0-9]/.test(base)) base = 'n' + base;
+  if (!base || /^[0-9]/.test(base) || RESERVED_IDS.has(base.toLowerCase())) base = 'n' + base;
   base = base.slice(0, 24);
   let id = base;
   let i = 2;
@@ -360,9 +365,33 @@ function readNodeRef(s, i) {
     if (s[from] === '"') from = skipQuoted(s, from);
     const end = s.indexOf(close, from);
     if (end === -1) continue;
-    return { id, shape, label: unquoteLabel(s.slice(i + open.length, end)), next: end + close.length };
+    return { id, shape, label: unquoteLabel(s.slice(i + open.length, end)), next: skipClass(s, end + close.length) };
   }
-  return { id, shape: null, label: null, next: i };
+  return { id, shape: null, label: null, next: skipClass(s, i) };
+}
+
+// `A:::hot` attaches a CSS class. We have no use for the class, but it must be
+// stepped over, or `A:::hot --> B` loses its edge.
+function skipClass(s, i) {
+  const m = s.slice(i).match(/^:::[A-Za-z0-9_-]+/);
+  return m ? i + m[0].length : i;
+}
+
+// `A & B` -- Mermaid's shorthand for several nodes on one side of a link.
+function readNodeList(s, i) {
+  const first = readNodeRef(s, i);
+  if (!first) return null;
+  const refs = [first];
+  let next = first.next;
+  for (;;) {
+    const amp = s.slice(next).match(/^\s*&\s*/);
+    if (!amp) break;
+    const ref = readNodeRef(s, next + amp[0].length);
+    if (!ref) break;
+    refs.push(ref);
+    next = ref.next;
+  }
+  return { refs, next };
 }
 
 // Rewrites Mermaid's `A -- text --> B` into the `A -->|text| B` form so the
@@ -466,24 +495,29 @@ function parseMermaid(text) {
 
     if (/^(direction|classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
 
-    // Anything left is a node declaration or a chain of edges.
+    // Anything left is a node declaration or a chain of edges, where either
+    // side of a link may be an `A & B` list: every pairing becomes an edge.
     const s = normalizeInlineLabels(line);
-    let ref = readNodeRef(s, 0);
-    if (!ref) continue;
-    let prev = ensureNode(ref);
-    let i = ref.next;
+    const head = readNodeList(s, 0);
+    if (!head) continue;
+    let prev = head.refs.map(ensureNode);
+    let i = head.next;
     while (i < s.length) {
       const link = s.slice(i).match(LINK_RE);
       if (!link) break;
       i += link[0].length;
-      const next = readNodeRef(s, i);
+      const next = readNodeList(s, i);
       if (!next) break;
       i = next.next;
-      const target = ensureNode(next);
-      const e = Object.assign(newEdge(prev.id, target.id), linkFromToken(link[1]));
-      e.label = link[2] ? unquoteLabel(link[2]) : '';
-      d.edges.push(e);
-      prev = target;
+      const targets = next.refs.map(ensureNode);
+      for (const a of prev) {
+        for (const b of targets) {
+          const e = Object.assign(newEdge(a.id, b.id), linkFromToken(link[1]));
+          e.label = link[2] ? unquoteLabel(link[2]) : '';
+          d.edges.push(e);
+        }
+      }
+      prev = targets;
     }
   }
 
@@ -513,6 +547,16 @@ function parseMermaid(text) {
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
     if (paths[i]) e.points = paths[i];
   });
+
+  // Node order is stacking order (front to back is what Bring to front
+  // changes), but declarations come out grouped by subgraph. The layout lines
+  // are written in the real order, so they put it back -- otherwise a block
+  // brought to the front could sink behind others on the way through Word.
+  const order = Object.keys(layout);
+  if (order.length) {
+    const rank = (n) => { const r = order.indexOf(n.id); return r === -1 ? Infinity : r; };
+    d.nodes.sort((p, q) => rank(p) - rank(q));
+  }
 
   // Groups own their members, so a node listed in two is a contradiction;
   // first one wins.

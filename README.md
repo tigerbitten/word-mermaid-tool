@@ -13,7 +13,7 @@ Prototype. Word desktop on Windows and Mac.
 - 23 shapes on the palette in three sections: blocks, hardware (mux, demux,
   buffer, delay, queue/FIFO, summing junction, wire junction, bus bar) and
   systems (memory, bus, document, decision, I/O…). Drag one onto the canvas —
-  a preview follows the pointer — or double-click empty canvas for a block.
+  a preview follows the pointer — or click one, then click where it goes.
 - **Select anything and a toolbar appears above it**, Miro-style: shape, fill,
   text size, bold, grouping for blocks; line style, arrowheads, thickness,
   colour, label size, bold and reverse for connectors. **Right-click** for
@@ -29,9 +29,13 @@ Prototype. Word desktop on Windows and Mac.
 - To reconnect: select a connector and drag either of its end dots onto a
   different block. To reroute: drag any leg of it sideways; the path stays
   square. *Reset path* goes back to automatic routing.
+- Dragging a block snaps it into line with the blocks around it — edges and
+  centres — with a pink guide showing what it lined up with.
 - Drag a corner or side handle to resize; hold Shift on a corner to keep the
   proportions. Shift- or Ctrl-click, or shift-drag a box, to multi-select.
   Hold Shift while dragging to move in a straight line. Esc mid-drag cancels.
+- With several blocks selected, **Align…** in the toolbar lines them up,
+  spaces them evenly, or makes them all the size of the first one selected.
 - Groups work like Miro frames: drag a group by its body, drag a block out to
   remove it, drop a block in to add it (the group lights up green as you do).
   Selecting a block outlines its group and tints the other members; the

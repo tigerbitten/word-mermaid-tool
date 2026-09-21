@@ -44,6 +44,7 @@
     background: rgba(255,255,255,0.94); border: 1px solid #ddd; border-radius: 6px; padding: 0.2rem; }
   #zoomBar button { min-width: 2.1rem; padding: 0.3rem 0.5rem; font-size: 0.9rem; }
   #zoomLevel { min-width: 3.4rem !important; color: #555; }
+  .zsep { width: 1px; background: #e3e5e8; margin: 0 0.15rem; }
   #hint { position: absolute; left: 0.7rem; bottom: 0.7rem; right: 14rem; color: #8a8f98;
     font-size: 0.78rem; pointer-events: none; }
 
@@ -51,7 +52,9 @@
      selected. It is the only place per-object controls live. */
   #toolbar { position: absolute; z-index: 20; display: flex; align-items: center; gap: 0.2rem;
     background: #fff; border: 1px solid #d6d9de; border-radius: 8px; padding: 0.25rem;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.14); white-space: nowrap; }
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14); white-space: nowrap;
+    /* In a narrow pane it wraps onto two rows rather than running off the edge. */
+    flex-wrap: wrap; max-width: calc(100% - 8px); }
   #toolbar.hidden { display: none; }
   #toolbar button, #toolbar select { padding: 0.3rem 0.5rem; font-size: 0.85rem; border-color: transparent;
     background: transparent; }
@@ -121,7 +124,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v10</span>
+    <span class="build">build v11</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -131,6 +134,9 @@
       <div id="toolbar" class="hidden"></div>
       <div id="hint"></div>
       <div id="zoomBar">
+        <button id="undoBtn" title="Undo (Ctrl+Z)">&#x21b6;</button>
+        <button id="redoBtn" title="Redo (Ctrl+Y)">&#x21b7;</button>
+        <span class="zsep"></span>
         <button id="zoomOut" title="Zoom out (Ctrl -)">&minus;</button>
         <button id="zoomLevel" title="Reset to 100% (Shift+0)">100%</button>
         <button id="zoomIn" title="Zoom in (Ctrl +)">+</button>
@@ -159,9 +165,9 @@
     <button id="loadBtn" title="Click a diagram in the document first">Open selected</button>
   </div>
 
-<script src="diagram.js?v=10"></script>
-<script src="render.js?v=10"></script>
-<script src="editor.js?v=10"></script>
+<script src="diagram.js?v=11"></script>
+<script src="render.js?v=11"></script>
+<script src="editor.js?v=11"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -198,6 +204,9 @@
   const EDGE_WIDTHS = [[1, 'hairline'], [1.5, 'normal'], [2.5, 'heavy'], [4, 'bus'], [6, 'extra wide']];
   const FONT_MIN = 8;
   const FONT_MAX = 42;
+  const ALIGN = [['left', 'Align left'], ['center', 'Align centres'], ['right', 'Align right'],
+                 ['top', 'Align top'], ['middle', 'Align middles'], ['bottom', 'Align bottom'],
+                 ['dist-h', 'Space evenly across'], ['dist-v', 'Space evenly down'], ['size', 'Match size']];
 
   const shapeName = (s) => (SHAPES_ALL.find((e) => e[0] === s) || ['', s])[1];
 
@@ -309,6 +318,7 @@
           item.classList.add('armed');
           armShape(shape);
           setStatus('click the canvas to place a ' + name.toLowerCase(), 'warning');
+          placingHint = true;
         });
         host.appendChild(item);
       }
@@ -341,8 +351,11 @@
   }
 
   function shapeSelect(nodes) {
-    const current = nodes.length === 1 ? nodes[0].shape : null;
-    return dropdown(SHAPES_ALL, current, (v) => applyToNodes((n) => {
+    // With a mix of shapes selected, the dropdown says so instead of showing
+    // whichever shape happens to come first in the list.
+    const same = nodes.every((n) => n.shape === nodes[0].shape);
+    const options = same ? SHAPES_ALL : [['', 'Shape…']].concat(SHAPES_ALL);
+    return dropdown(options, same ? nodes[0].shape : '', (v) => v && applyToNodes((n) => {
       // Switching into or out of a wiring symbol changes what size makes sense.
       if (LABELLESS.has(v) !== LABELLESS.has(n.shape)) { const [w, h] = defaultSize(v); n.w = w; n.h = h; }
       n.shape = v;
@@ -437,8 +450,20 @@
     ];
   }
 
+  // A one-shot dropdown: its first entry is only a caption, and it snaps back
+  // to it after each use so the same action can be picked twice in a row.
+  function alignSelect(count) {
+    const options = [['', 'Align…']].concat(ALIGN.filter(([v]) => count >= 3 || !v.startsWith('dist')));
+    const s = dropdown(options, '', (v) => { if (v) reportRefusal(alignSelection(v), ''); }, 'Align and distribute');
+    return s;
+  }
+
+  // groupSelection and friends return null on success, a reason on refusal.
+  // With no success text there's nothing to say -- and an empty green box
+  // would be worse than silence.
   function reportRefusal(reason, successText) {
-    setStatus(reason || successText, reason ? 'error' : 'success');
+    if (reason) setStatus(reason, 'error');
+    else setStatus(successText, successText ? 'success' : '');
   }
 
   function membersText(g) {
@@ -476,8 +501,11 @@
       add(sep(), more);
     } else if (info.nodes.length) {
       const texty = info.nodes.filter((n) => !LABELLESS.has(n.shape));
-      add(shapeSelect(info.nodes), fillButton(info.nodes));
+      add(shapeSelect(info.nodes));
+      // A borderless text label has nothing to fill.
+      if (info.nodes.some((n) => n.shape !== 'text')) add(fillButton(info.nodes));
       if (texty.length) add(sep(), nodeFontStepper(texty), boldButton(texty.every((n) => n.bold)));
+      if (info.nodes.length > 1) add(sep(), alignSelect(info.nodes.length));
       add(sep());
       if (info.group) {
         add(chip('in “' + info.group.label + '”', membersText(info.group)),
@@ -494,7 +522,7 @@
           sep(), more);
     }
     hint.textContent = toolbar.children.length ? '' :
-      'Drag a shape in, or double-click the canvas. Drag a blue dot to connect, or click one to add the next block. ' +
+      'Drag a shape in from the left. Drag a blue dot to connect, or click one to add the next block. ' +
       'Right-click for everything else.';
   }
 
@@ -618,7 +646,9 @@
         row('Text size', nodeFontStepper(texty), boldButton(texty.every((n) => n.bold)));
       }
       row('Shape', shapeSelect(info.nodes));
-      row('Fill', swatchRow(FILLS, info.nodes[0].fill, (c) => applyToNodes((n) => { n.fill = c; })));
+      if (info.nodes.some((n) => n.shape !== 'text')) {
+        row('Fill', swatchRow(FILLS, info.nodes[0].fill, (c) => applyToNodes((n) => { n.fill = c; })));
+      }
       hr();
       act('Duplicate', 'Ctrl+D', duplicateSelection);
       act('Copy', 'Ctrl+C', copySelection);
@@ -634,6 +664,14 @@
         act('Add to “' + g.label + '”', '', () => reportRefusal(addSelectionToGroup(g.id), 'added to ' + g.label));
       }
       if (info.inGroup) act('Remove from group', '', () => reportRefusal(removeSelectionFromGroup(), 'removed from group'));
+      if (info.nodes.length > 1) {
+        hr();
+        head('Align');
+        for (const [v, name] of ALIGN) {
+          if (v.startsWith('dist') && info.nodes.length < 3) continue;
+          act(name, '', () => reportRefusal(alignSelection(v), ''));
+        }
+      }
       hr();
       act('Bring to front', '', () => reorderSelection(true));
       act('Send to back', '', () => reorderSelection(false));
@@ -673,10 +711,15 @@
     return true;
   }
 
+  // The "click the canvas to place..." prompt is a warning, so it doesn't fade
+  // by itself; it has to go as soon as the shape is placed or disarmed.
+  let placingHint = false;
+
   function onModelChanged() {
     src.value = toMermaid(getModel());
     srcDirty = false;
     document.querySelectorAll('.pal-item.armed').forEach((n) => n.classList.remove('armed'));
+    if (placingHint) { placingHint = false; setStatus(''); }
     refreshToolbar();
     positionToolbar();
   }
@@ -699,17 +742,30 @@
     return TAG_PREFIX + Math.random().toString(36).slice(2, 8);
   }
 
+  // The picture to update: a diagram selected in the document, else the one
+  // this session inserted or opened. A selected picture that isn't one of our
+  // diagrams -- a photo, a screenshot -- is never overwritten; that would
+  // replace someone's image with a diagram because it happened to be selected.
   async function findTarget(context) {
-    const selected = context.document.getSelection().inlinePictures;
-    selected.load('items');
+    const range = context.document.getSelection();
+    const selected = range.inlinePictures;
+    selected.load('items/altTextDescription,items/altTextTitle');
+    range.load('text');
     await context.sync();
-    if (selected.items.length) return { pic: selected.items[0], selected: true };
+    const ours = selected.items.find((p) => looksLikeOurAltText(p.altTextDescription || ''));
+    if (ours) {
+      // Replacing through the selection range is the path proven to swap a
+      // picture in place, but it replaces everything selected -- so it's only
+      // used when the picture is all there is. Otherwise the picture itself.
+      const alone = selected.items.length === 1 && range.text.trim().length <= 1;
+      return { pic: ours, viaRange: alone, tag: ours.altTextTitle };
+    }
     if (!docTag) return null;
     const all = context.document.body.inlinePictures;
     all.load('items/altTextTitle');
     await context.sync();
     const pic = all.items.find((p) => p.altTextTitle === docTag);
-    return pic ? { pic, selected: false } : null;
+    return pic ? { pic, viaRange: false, tag: docTag } : null;
   }
 
   async function insertOrReplace(mode) {
@@ -732,13 +788,12 @@
           if (mode === 'replace') {
             const target = await findTarget(context);
             if (!target) { outcome = 'none'; return; }
-            // A selected picture is replaced through the selection range, the
-            // path proven to swap it in place; one found by its tag is
-            // replaced through the picture itself.
-            pic = target.selected
+            pic = target.viaRange
               ? context.document.getSelection().insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace)
               : target.pic.insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace);
-            tag = docTag || newTag();
+            // The picture keeps its own tag, so updating a different diagram
+            // than the one opened can't leave two pictures sharing one.
+            tag = target.tag && target.tag.startsWith(TAG_PREFIX) ? target.tag : newTag();
             outcome = 'updated';
           } else {
             // A diagram gets its own centred paragraph rather than landing
@@ -763,7 +818,7 @@
           docTag = tag;
         });
         if (outcome === 'none') {
-          setStatus('nothing to update -- click the diagram in the document, or use Insert', 'error');
+          setStatus('nothing to update -- click a diagram from this tool in the document, or use Insert', 'error');
         } else {
           setStatus(outcome === 'updated' ? 'updated in the document' : 'inserted -- keep editing and press Update to refresh it', 'success');
         }
@@ -778,19 +833,18 @@
       try {
         await Word.run(async (context) => {
           const pics = context.document.getSelection().inlinePictures;
-          pics.load('items');
+          pics.load('items/altTextDescription,items/altTextTitle');
           await context.sync();
           if (pics.items.length === 0) { setStatus('click a diagram in the document first', 'error'); return; }
 
-          const pic = pics.items[0];
-          pic.load('altTextDescription,altTextTitle');
-          await context.sync();
-
-          const raw = pic.altTextDescription || '';
-          if (!looksLikeOurAltText(raw)) {
+          // With a stretch of the document selected, the first of our diagrams
+          // in it -- not simply the first picture, which may be a photo.
+          const pic = pics.items.find((p) => looksLikeOurAltText(p.altTextDescription || ''));
+          if (!pic) {
             setStatus('that image has no Mermaid source in its alt-text (not from this tool)', 'error');
             return;
           }
+          const raw = pic.altTextDescription;
           let d;
           try { d = parseMermaid(raw); }
           catch (e) { setStatus('diagram source is corrupted, refusing to load: ' + e.message, 'error'); return; }
@@ -894,7 +948,10 @@
     }
   });
 
-  setModel(parseMermaid(STARTER));
+  document.getElementById('undoBtn').addEventListener('click', undo);
+  document.getElementById('redoBtn').addEventListener('click', redo);
+
+  setModel(parseMermaid(STARTER), true);
   onModelChanged();
   requestAnimationFrame(() => { fitView(); onViewChanged(); });
 

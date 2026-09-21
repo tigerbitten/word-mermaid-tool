@@ -29,6 +29,7 @@ const EDITOR_STYLE = `
   .wm-group-join { fill: #16a34a; fill-opacity: 0.06; stroke: #16a34a; }
   .wm-member { fill: #2563eb; fill-opacity: 0.07; stroke: #2563eb; stroke-opacity: 0.55; }
   .wm-ghost { fill: #2563eb; fill-opacity: 0.06; stroke: #2563eb; stroke-dasharray: 4 3; }
+  .wm-guide { fill: none; stroke: #e11d74; }
 `;
 
 const PAGE_STYLE = `
@@ -118,6 +119,10 @@ function initEditor(hostEl, onChange, onViewChange, onContextMenu, extra) {
   svg.addEventListener('pointerdown', onPointerDown);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
+  // The OS can take the pointer away mid-drag (a notification, alt-tab);
+  // treat that like Esc rather than leaving a drag stuck on.
+  window.addEventListener('pointercancel', () => { if (drag) cancelDrag(); });
+  window.addEventListener('blur', () => { if (drag) cancelDrag(); });
   svg.addEventListener('wheel', onWheel, { passive: false });
   svg.addEventListener('dblclick', onDoubleClick);
   svg.addEventListener('contextmenu', onContext);
@@ -246,6 +251,7 @@ function drawChrome() {
   }
 
   if (selEdge >= 0 && model.edges[selEdge]) drawEdgeChrome(s);
+  if (drag && drag.mode === 'move') drawGuides(s);
 
   if (ghost) drawGhost(ghost.shape, ghost.p);
 
@@ -294,11 +300,15 @@ function drawChrome() {
   if (only && !drag) {
     const mx = only.x + only.w / 2;
     const my = only.y + only.h / 2;
-    const handles = [
+    let handles = [
       ['nw', only.x, only.y, 'nwse'], ['n', mx, only.y, 'ns'], ['ne', only.x + only.w, only.y, 'nesw'],
       ['e', only.x + only.w, my, 'ew'], ['se', only.x + only.w, only.y + only.h, 'nwse'],
       ['s', mx, only.y + only.h, 'ns'], ['sw', only.x, only.y + only.h, 'nesw'], ['w', only.x, my, 'ew'],
     ];
+    // On something small on screen -- a junction dot, a bus bar -- eight
+    // handles would bury it, and grabbing it to move it would resize it
+    // instead. One corner handle is enough.
+    if (Math.min(only.w, only.h) * view.zoom < 40) handles = handles.filter((h) => h[0] === 'se');
     for (const [name, x, y, cursor] of handles) {
       el('rect', {
         x: x - 4 * s, y: y - 4 * s, width: 8 * s, height: 8 * s,
@@ -496,6 +506,10 @@ function refitGroups() {
 
 function commit() {
   refitGroups();
+  // Once you've started editing, the view is yours: the pane resizing (the
+  // status line wrapping onto a second line is enough) must not re-fit and
+  // shift the whole diagram under the pointer.
+  viewTouched = true;
   render();
   notify();
 }
@@ -541,6 +555,14 @@ function addConnected(from, anchor, shape, c) {
   pushUndo();
   const boxes = groupBoxes();
   const n = makeNode(shape, c);
+  // The same shape comes out the same size as its source, so a chain built by
+  // clicking dots is a row of matching blocks rather than a ragged one.
+  if (shape === from.shape && !LABELLESS.has(shape)) {
+    n.x = snap(c.x - from.w / 2);
+    n.y = snap(c.y - from.h / 2);
+    n.w = from.w;
+    n.h = from.h;
+  }
   regroup([n], boxes);
   const e = newEdge(from.id, n.id);
   e.fromAnchor = { side: anchor.side, t: anchor.t };
@@ -730,9 +752,13 @@ function copySelection() {
   const nodes = selectedNodes();
   if (!nodes.length) return false;
   const ids = new Set(nodes.map((n) => n.id));
+  // Groups come along when every one of their blocks does. Without that, a
+  // duplicated group pasted 20px over from the original dropped all of its
+  // copies into the original group instead of making a second one.
   clipboard = JSON.parse(JSON.stringify({
     nodes,
     edges: model.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
+    groups: model.groups.filter((g) => g.members.length && g.members.every((m) => ids.has(m))),
   }));
   clipboard.pastes = 0;
   return true;
@@ -790,9 +816,19 @@ function pasteClipboard(dx, dy) {
     if (copy.points) copy.points = copy.points.map((q) => ({ x: q.x + snap(dx), y: q.y + snap(dy) }));
     model.edges.push(copy);
   }
-  // Pasted next to blocks in a group, the copies join that group.
+  const madeGroups = [];
+  for (const g of clipboard.groups || []) {
+    const copy = { id: makeId(g.label, taken), label: g.label, members: g.members.map((m) => remap[m]),
+                   x: 0, y: 0, w: 0, h: 0 };
+    taken.add(copy.id);
+    model.groups.push(copy);
+    madeGroups.push(copy.id);
+  }
+  // Pasted next to blocks in a group, loose copies join that group. Copies in
+  // a pasted group of their own stay in it: regroup leaves whole groups alone.
   regroup(made.map((id) => nodeById(model, id)), boxes);
-  sel = new Set(made);
+  sel = new Set(made.filter((id) => !madeGroups.some((gid) =>
+    model.groups.find((g) => g.id === gid).members.includes(id))).concat(madeGroups));
   selEdge = -1;
   commit();
   return true;
@@ -834,6 +870,13 @@ function redo() {
 
 function onPointerDown(ev) {
   if (pendingConnect) return;     // the shape picker is open; it owns the next click
+  // Any press on the canvas finishes an open label edit. Normally the textarea
+  // losing focus does that, but if it never had focus (the host can refuse
+  // it) no blur ever arrives and the box would sit there for good.
+  commitOpenEditor();
+  // Capture, so the release still arrives if the pointer leaves the pane
+  // mid-drag -- otherwise the drag never ends and the next move drags again.
+  try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic events have no live pointer */ }
   if (ev.button === 1) {
     drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
     ev.preventDefault();
@@ -954,10 +997,83 @@ function legCursor(p) {
   return Math.abs(route.raw[k].y - route.raw[k + 1].y) < 0.5 ? 'ns-resize' : 'ew-resize';
 }
 
+// Smart guides, PowerPoint/Miro-style: while dragging, the moving blocks snap
+// to line up with any other block -- left, centre or right edges, top, middle
+// or bottom -- within a few screen pixels, and a guide line shows what they
+// lined up with. Lining up with the block next door is nearly always what you
+// were aiming for, so it wins over the grid on that axis.
+function alignGuides(dx, dy, lockX, lockY) {
+  const b0 = drag.bounds;
+  const moving = new Set(drag.nodes.map((n) => n.id));
+  const others = model.nodes.filter((n) => !moving.has(n.id));
+  const tol = 6 / view.zoom;
+  const guides = [];
+  const along = (key, size, d, locked) => {
+    if (locked || !others.length) return null;
+    let best = null;
+    for (const f of [0, 0.5, 1]) {
+      const mine = b0[key] + d + b0[size] * f;
+      for (const o of others) {
+        for (const g of [0, 0.5, 1]) {
+          const v = o[key] + o[size] * g;
+          const off = v - mine;
+          if (Math.abs(off) <= tol && (!best || Math.abs(off) < Math.abs(best.off))) best = { off, v, o };
+        }
+      }
+    }
+    if (best) guides.push({ axis: key, v: best.v, o: best.o });
+    return best ? d + best.off : null;
+  };
+  return { gx: along('x', 'w', dx, lockX), gy: along('y', 'h', dy, lockY), guides };
+}
+
+function drawGuides(s) {
+  const b = boundsOf(drag.nodes);
+  for (const g of drag.guides || []) {
+    const o = g.o;
+    const d = g.axis === 'x'
+      ? `M${g.v} ${Math.min(b.y, o.y) - 12}V${Math.max(b.y + b.h, o.y + o.h) + 12}`
+      : `M${Math.min(b.x, o.x) - 12} ${g.v}H${Math.max(b.x + b.w, o.x + o.w) + 12}`;
+    el('path', { d, class: 'wm-guide', 'stroke-width': 1 * s }, chrome);
+  }
+}
+
+// Align and distribute, for a multi-selection. Alignment lines everything up
+// with the selection's own outer edge or centre; distribution fixes the two
+// outermost blocks and spaces the rest evenly between them.
+function alignSelection(how) {
+  const nodes = selectedNodes();
+  const needs = how.startsWith('dist') ? 3 : 2;
+  if (nodes.length < needs) return 'select ' + needs + ' or more blocks first';
+  pushUndo();
+  const b = boundsOf(nodes);
+  const first = nodeById(model, [...sel].find((id) => nodeById(model, id))) || nodes[0];
+  for (const n of nodes) {
+    if (how === 'left') n.x = b.x;
+    if (how === 'center') n.x = Math.round(b.x + b.w / 2 - n.w / 2);
+    if (how === 'right') n.x = b.x + b.w - n.w;
+    if (how === 'top') n.y = b.y;
+    if (how === 'middle') n.y = Math.round(b.y + b.h / 2 - n.h / 2);
+    if (how === 'bottom') n.y = b.y + b.h - n.h;
+    // Same size as the block selected first, the way PowerPoint does it.
+    if (how === 'size') { n.w = first.w; n.h = first.h; }
+  }
+  if (how === 'dist-h' || how === 'dist-v') {
+    const [pos, len] = how === 'dist-h' ? ['x', 'w'] : ['y', 'h'];
+    const sorted = nodes.slice().sort((p, q) => (p[pos] + p[len] / 2) - (q[pos] + q[len] / 2));
+    const total = sorted.reduce((sum, n) => sum + n[len], 0);
+    const gap = (b[len] - total) / (sorted.length - 1);
+    let at = b[pos];
+    for (const n of sorted) { n[pos] = Math.round(at); at += n[len] + gap; }
+  }
+  commit();
+  return null;
+}
+
 function startMove(p) {
   const nodes = selectedNodes();
   drag = {
-    mode: 'move', start: p, nodes,
+    mode: 'move', start: p, nodes, bounds: boundsOf(nodes), guides: [],
     boxes: nodes.map((m) => ({ n: m, x: m.x, y: m.y })),
     riders: riders(new Set(nodes.map((m) => m.id))),
     // Group membership and boxes as they were at pointerdown. Every move
@@ -982,10 +1098,14 @@ function cancelDrag() {
 }
 
 // A label editor is positioned in screen pixels over its block, so anything
-// that moves the view has to close it first or it drifts off the block.
+// that moves the view has to close it first or it drifts off the block. The
+// textarea's own commit runs on blur; `wmFinish` covers the case where it
+// never had focus, so blur can't fire.
 function commitOpenEditor() {
   const open = host.querySelector('.wm-label-input');
-  if (open) open.blur();
+  if (!open) return;
+  open.blur();
+  if (open.isConnected && open.wmFinish) open.wmFinish();
 }
 
 // Undo is snapshotted on the first movement rather than on pointerdown, so a
@@ -1043,10 +1163,19 @@ function onPointerMove(ev) {
     let rx = p.x - drag.start.x;
     let ry = p.y - drag.start.y;
     // Shift locks the drag to whichever axis it's mostly moving along.
-    if (ev.shiftKey) { if (Math.abs(rx) > Math.abs(ry)) ry = 0; else rx = 0; }
-    const dx = snap(rx);
-    const dy = snap(ry);
-    for (const b of drag.boxes) { b.n.x = snap(b.x + dx); b.n.y = snap(b.y + dy); }
+    let lockX = false;
+    let lockY = false;
+    if (ev.shiftKey) { if (Math.abs(rx) > Math.abs(ry)) { ry = 0; lockY = true; } else { rx = 0; lockX = true; } }
+    const { gx, gy, guides } = alignGuides(snap(rx), snap(ry), lockX, lockY);
+    drag.guides = guides;
+    // A guided axis moves by exactly the aligning amount; an unguided one
+    // snaps to the grid as before.
+    const dx = gx != null ? gx : snap(rx);
+    const dy = gy != null ? gy : snap(ry);
+    for (const b of drag.boxes) {
+      b.n.x = gx != null ? b.x + dx : snap(b.x + dx);
+      b.n.y = gy != null ? b.y + dy : snap(b.y + dy);
+    }
     for (const r of drag.riders) r.e.points = r.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
     for (const [g, members] of drag.members) g.members = members.slice();
     regroup(drag.nodes, drag.groupBoxes);
@@ -1130,7 +1259,7 @@ function finishConnect(d, ev) {
   // same shape appears in that direction, already wired up.
   if (Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < 4) {
     const shape = nextShapeAfter(d.from);
-    const [w, h] = defaultSize(shape);
+    const [w, h] = shape === d.from.shape ? [d.from.w, d.from.h] : defaultSize(shape);
     const dir = DIRS[d.anchor.side];
     const reach = QUICK_GAP + (dir.x ? (d.from.w + w) / 2 : (d.from.h + h) / 2);
     const fc = centerOf(d.from);
@@ -1264,11 +1393,11 @@ function onDoubleClick(ev) {
   const ei = edgeAt(p);
   if (ei >= 0) { selEdge = ei; sel = new Set(); render(); editEdgeLabel(ei); return; }
   const g = groupAt(p);
-  if (g && p.y <= g.y + GROUP_TITLE_H) { beginLabelEdit(g); return; }
-  // Empty canvas: make a block here and name it. Two clicks from nothing to a
-  // named block is the fastest path there is. Inside a group's body the new
-  // block lands in that group.
-  addNode('rect', p);
+  if (g && p.y <= g.y + GROUP_TITLE_H) beginLabelEdit(g);
+  // Double-clicking empty canvas does nothing. It used to create a block,
+  // which mostly meant stray "Block" boxes left behind by a double-click that
+  // was only meant to select or zoom. New blocks come from the palette, from
+  // clicking a dot, or from right-click -> Add block here.
 }
 
 // An edge has no box to hang the editor on, so one is synthesised over the
@@ -1291,8 +1420,7 @@ function beginLabelEdit(item, seed, box) {
   // straight from one block to the next has to just work. blur() only fires if
   // it still had focus, so remove it outright afterwards -- a stranded overlay
   // sitting over the canvas is the worst outcome here.
-  const open = host.querySelector('.wm-label-input');
-  if (open) { open.blur(); open.remove(); }
+  commitOpenEditor();
 
   // A group's name is edited in its title tab, not over the whole group --
   // a text box the size of the group, with the name floating in the middle
@@ -1339,6 +1467,7 @@ function beginLabelEdit(item, seed, box) {
       commit();
     }
   };
+  input.wmFinish = finish;
   input.addEventListener('blur', finish);
   // Esc keeps what you typed and just stops editing, as it does in Word,
   // PowerPoint and Miro -- throwing away a label you just typed because you
@@ -1428,8 +1557,10 @@ function onKeyDown(ev) {
 
 // --- API used by the taskpane shell -------------------------------------
 
-function setModel(d) {
-  pushUndo();
+// `noUndo` for the diagram the pane starts with: Ctrl+Z straight after opening
+// the add-in must not empty the canvas.
+function setModel(d, noUndo) {
+  if (!noUndo) pushUndo();
   model = d;
   sel = new Set();
   selEdge = -1;

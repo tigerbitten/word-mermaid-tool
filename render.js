@@ -441,7 +441,11 @@ function edgeGeometry(d) {
   return edgeRoutes(d).map((r) => r && (r.self ? r.raw : simplify(r.raw)));
 }
 
-function roundedPathD(pts, r) {
+function roundedPathD(raw, r) {
+  // Two coincident points make a zero-length leg, and rounding its corner
+  // divides by that length -- NaN in the path, and a connector that vanishes
+  // from the canvas and the inserted picture alike.
+  const pts = raw.filter((p, i) => i === 0 || Math.hypot(p.x - raw[i - 1].x, p.y - raw[i - 1].y) > 0.01);
   if (pts.length < 2) return '';
   let d = `M${pts[0].x} ${pts[0].y}`;
   for (let i = 1; i < pts.length - 1; i++) {
@@ -480,7 +484,9 @@ function trimEnd(pts, amount) {
   const last = out[out.length - 1];
   const prev = out[out.length - 2];
   const len = Math.hypot(last.x - prev.x, last.y - prev.y);
-  if (len <= amount) return out;
+  // A leg no longer than the arrowhead is left alone: pulling it back would
+  // leave its end sitting on top of the previous point.
+  if (len <= amount + 1) return out;
   out[out.length - 1] = {
     x: last.x - ((last.x - prev.x) / len) * amount,
     y: last.y - ((last.y - prev.y) / len) * amount,
@@ -570,6 +576,23 @@ function diagramBounds(d) {
   const ys = [];
   const add = (x0, y0, x1, y1) => { xs.push(x0, x1); ys.push(y0, y1); };
   for (const b of d.nodes.concat(d.groups.filter((g) => g.w > 0))) add(b.x, b.y, b.x + b.w, b.y + b.h);
+  // Text is allowed to spill out of a block resized smaller than its label,
+  // and a long group name out of a narrow group; the spill is drawn, so it
+  // counts too.
+  for (const n of d.nodes) {
+    if (LABELLESS.has(n.shape) || !n.label) continue;
+    const size = n.fontSize || DEFAULT_FONT_SIZE;
+    const area = labelArea(n);
+    const lines = wrapLabel(n.label, area.w - LABEL_PAD_X * 2, size, n.bold);
+    const tw = Math.max(...lines.map((l) => textWidth(l, size, n.bold)));
+    const th = lines.length * lineH(size);
+    const cx = area.x + area.w / 2;
+    const cy = area.y + area.h / 2;
+    add(cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2);
+  }
+  for (const g of d.groups) {
+    if (g.w > 0) add(g.x, g.y, g.x + 10 + textWidth(g.label, 12, true) + 4, g.y + GROUP_TITLE_H);
+  }
   edgeGeometry(d).forEach((pts, i) => {
     if (!pts || pts.length < 2) return;
     const e = d.edges[i];
@@ -606,7 +629,10 @@ function buildExportSvg(d) {
 // --- the picture that goes into the document ----------------------------
 
 const RASTER_SCALE = 3;          // oversample, so the PNG stays sharp in print
-const PX_TO_PT = 0.75;           // 1 CSS px = 1/96in, 1pt = 1/72in
+// Placed so a label at the default size lands at 11pt -- the size of the body
+// text around it. At a literal 1px = 0.75pt it came out at 9.75pt, a visibly
+// smaller, fussier-looking diagram than the document it sits in.
+const PX_TO_PT = 11 / DEFAULT_FONT_SIZE;
 const MAX_DOC_WIDTH_PT = 468;    // 6.5in: US Letter minus one-inch margins
 
 const CRC_TABLE = (() => {
