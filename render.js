@@ -76,14 +76,11 @@ function wrapLabel(label, maxWidth, size) {
 
 // Grows a node to fit its label. Never shrinks below what the user dragged it
 // to -- resizing is theirs to control, this only prevents clipped text.
-// `tight` re-derives the box instead of only growing it, which is what a text
-// size change needs: shrinking the font otherwise leaves a box full of air.
-function fitNodeSize(n, tight) {
+function fitNodeSize(n) {
   const size = n.fontSize || DEFAULT_FONT_SIZE;
   const lines = wrapLabel(n.label, Math.max(60, n.w - LABEL_PAD_X * 2), size);
   const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size)), 0)) + LABEL_PAD_X * 2;
   const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2;
-  if (tight) { n.w = Math.max(60, needW); n.h = Math.max(36, needH); return; }
   n.w = Math.max(n.w, needW, 60);
   n.h = Math.max(n.h, needH, 36);
 }
