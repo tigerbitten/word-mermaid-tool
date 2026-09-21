@@ -9,8 +9,8 @@ const MIN_W = 60;
 const MIN_H = 36;
 const MIN_WIRE = 8;       // wiring symbols (junction, bar) may be much smaller than a text box
 const UNDO_DEPTH = 50;
-const PORT_OUT = 12;      // screen px between a block's border and its connection dots
-const QUICK_GAP = 80;     // gap left by click-a-dot quick create
+const CONNECT_BAND = 12;  // screen px outside a block's edge from which dragging starts a line
+const ALIGN_SNAP = 8;     // screen px within which a dropped line end snaps level with its other end
 const LINE_LEN = 160;     // a line dropped from the palette
 const ATTACH_NEAR = 14;   // screen px from a block's edge within which an end attaches at that exact spot
 
@@ -20,7 +20,7 @@ const EDITOR_STYLE = `
   .wm-multibox { fill: none; stroke: #2563eb; stroke-dasharray: 5 4; }
   .wm-hover { fill: none; stroke: #93b4f5; }
   .wm-seledge { fill: none; stroke: #2563eb; opacity: 0.35; }
-  .wm-port { fill: #fff; stroke: #2563eb; cursor: crosshair; }
+  .wm-connect { fill: #2563eb; stroke: #fff; pointer-events: none; }
   .wm-handle { fill: #fff; stroke: #2563eb; }
   .wm-endhandle { fill: #2563eb; stroke: #fff; cursor: move; }
   .wm-marquee { fill: #2563eb; fill-opacity: 0.08; stroke: #2563eb; stroke-dasharray: 4 3; }
@@ -71,6 +71,7 @@ let viewTouched = false;
 let sel = new Set();      // node and group ids
 let selEdge = -1;
 let hoverNode = null;
+let connectSpot = null;   // where a line would start from, while the pointer is in a block's edge band
 let drag = null;
 let armedShape = null;
 let ghost = null;         // { shape, p }: preview of a shape about to be placed
@@ -176,23 +177,21 @@ function render() {
   onRender();
 }
 
-// Ports are spaced roughly every 45px along a side, so a tall or wide block
-// offers more places to land than a small one -- which is the whole point of
-// not being stuck with four.
-function portSpots(n) {
-  const out = [];
-  for (const side of ['n', 'e', 's', 'w']) {
-    const len = side === 'n' || side === 's' ? n.w : n.h;
-    const count = Math.max(1, Math.min(5, Math.round(len / 45)));
-    for (let i = 1; i <= count; i++) {
-      const t = i / (count + 1);
-      const p = anchorPoint(n, side, t);
-      out.push({ x: p.x, y: p.y, side, t });
-    }
-  }
-  return out;
+// Where a new line would start if the pointer pressed here: a thin band just
+// outside a block's outline, any point along any edge. No dots are shown on a
+// block; being in the band is signalled by a crosshair and a single marker at
+// the exact spot. Inside the block is for moving it; on a line is for the line.
+function connectSpotAt(p) {
+  if (nodeAt(p)) return null;
+  const band = CONNECT_BAND / view.zoom;
+  const n = nodeAt(p, band);
+  if (!n || edgeAt(p) >= 0) return null;
+  const hit = nearestOnOutline(n, p);
+  // Past a circle's curve but still inside its bounding box's band, the real
+  // outline can be much further away than the band; that's not "at the edge".
+  if (hit.dist > band * 1.6) return null;
+  return { node: n, side: hit.side, t: hit.t, at: hit.at };
 }
-
 
 // A line with both ends loose -- dropped from the palette and not yet attached.
 function freeLine(e) {
@@ -215,7 +214,6 @@ function outline(box, pad, cls, width, parent) {
 function drawChrome() {
   const s = 1 / view.zoom;
   const only = sel.size === 1 ? nodeById(model, [...sel][0]) : null;
-  let portNode = hoverNode || only;
 
   // Groups first, underneath everything else. A selected group -- or the
   // group of a selected block -- is outlined and its members tinted, so what
@@ -272,29 +270,10 @@ function drawChrome() {
     if (drag.attachAt) el('circle', { cx: drag.attachAt.x, cy: drag.attachAt.y, r: 4.5 * s, class: 'wm-attach' }, chrome);
   }
 
-  // No dots mid-gesture (panning, moving, resizing, wiring) or while the shape
-  // picker is open. Otherwise the last block the pointer passed over kept its
-  // dots lit while the canvas slid around under it.
-  if (drag || pendingConnect) portNode = null;
-  if (portNode) {
-    for (const p of portSpots(portNode)) {
-      // The dots float just outside the border, the way Miro draws them, so
-      // grabbing a block near its edge moves it instead of starting a
-      // connector, and the side resize handles on the border stay clear. An
-      // invisible disc larger than the dot does the catching -- a 5px target
-      // is far too fiddly to hit, especially zoomed out.
-      const cx = p.x + DIRS[p.side].x * PORT_OUT * s;
-      const cy = p.y + DIRS[p.side].y * PORT_OUT * s;
-      el('circle', {
-        cx, cy, r: 10 * s, fill: 'transparent', stroke: 'none',
-        style: 'cursor:crosshair', 'data-role': 'port', 'data-for': portNode.id,
-        'data-side': p.side, 'data-t': p.t.toFixed(4),
-      }, chrome);
-      el('circle', {
-        cx, cy, r: 5 * s, class: 'wm-port', 'stroke-width': 2 * s,
-        style: 'pointer-events:none',
-      }, chrome);
-    }
+  // The one marker for starting a line: where it would begin, if the pointer
+  // is in a block's edge band. Nothing mid-gesture or with the picker open.
+  if (connectSpot && !drag && !pendingConnect) {
+    el('circle', { cx: connectSpot.at.x, cy: connectSpot.at.y, r: 4 * s, class: 'wm-connect', 'stroke-width': 1.5 * s }, chrome);
   }
 
   if (only && !drag) {
@@ -605,24 +584,8 @@ function matchSize(n, from, c) {
   n.h = from.h;
 }
 
-// A new block wired to `from` at `anchor`. The shape defaults to the source's,
-// which is what you almost always want next in a chain.
-function addConnected(from, anchor, shape, c) {
-  pushUndo();
-  const boxes = groupBoxes();
-  const n = makeNode(shape, c);
-  matchSize(n, from, c);
-  regroup([n], boxes);
-  const e = newEdge(from.id, n.id);
-  e.fromAnchor = { side: anchor.side, t: anchor.t };
-  model.edges.push(e);
-  sel = new Set([n.id]);
-  selEdge = -1;
-  commit();
-  beginLabelEdit(n);
-  return n;
-}
-
+// What the shape picker offers first after drawing a line out of `n`: the
+// same shape, which is what you almost always want next in a chain.
 function nextShapeAfter(n) {
   return n.shape === 'text' || LABELLESS.has(n.shape) ? 'rect' : n.shape;
 }
@@ -971,17 +934,6 @@ function onPointerDown(ev) {
   const role = ev.target.getAttribute && ev.target.getAttribute('data-role');
   const p = toModel(ev);
 
-  // Pressing a dot starts a new line from it. Nothing is created until the
-  // pointer actually moves: a plain click on a dot is the quick-create
-  // gesture instead (see finishEnd).
-  if (role === 'port') {
-    const from = nodeById(model, ev.target.getAttribute('data-for'));
-    if (!from) return;            // chrome outlived the block it belonged to
-    const anchor = { side: ev.target.getAttribute('data-side'), t: +ev.target.getAttribute('data-t') };
-    drag = { mode: 'end', edge: null, end: 'to', from, anchor, sx: ev.clientX, sy: ev.clientY };
-    render();
-    return;
-  }
   if (role === 'edge-end') {
     const e = model.edges[selEdge];
     if (!e) return;
@@ -1046,6 +998,17 @@ function onPointerDown(ev) {
     }
     render();
     notify();
+    return;
+  }
+
+  // Just outside a block's edge: start a new line from that exact spot.
+  // Nothing is created until the pointer actually moves (see moveEnd).
+  const spot = connectSpotAt(p);
+  if (spot) {
+    drag = { mode: 'end', edge: null, end: 'to', from: spot.node, anchor: { side: spot.side, t: spot.t },
+             sx: ev.clientX, sy: ev.clientY };
+    connectSpot = null;
+    render();
     return;
   }
 
@@ -1250,6 +1213,17 @@ function moveEnd(ev, p) {
   if (target) {
     const hit = nearestOnOutline(target, p);
     const exact = hit.dist <= ATTACH_NEAR / view.zoom;
+    // Dropped nearly level with the other end, it snaps level, so the
+    // connector comes out dead straight instead of with a two-pixel jog.
+    if (exact) {
+      const o = otherEndPoint(e, end);
+      const [pos, len] = hit.side === 'e' || hit.side === 'w' ? ['y', 'h'] : ['x', 'w'];
+      const near = Math.abs(hit.at[pos] - o[pos]) <= ALIGN_SNAP / view.zoom;
+      if (near && o[pos] > target[pos] + 2 && o[pos] < target[pos] + target[len] - 2) {
+        hit.t = (o[pos] - target[pos]) / target[len];
+        hit.at = anchorPoint(target, hit.side, hit.t);
+      }
+    }
     e[end] = target.id;
     e[end + 'Anchor'] = exact ? { side: hit.side, t: hit.t } : null;
     if (exact) drag.attachAt = hit.at;
@@ -1279,14 +1253,19 @@ function onPointerMove(ev) {
   if (!drag) {
     if (pendingConnect) return;
     const p = toModel(ev);
-    // Ports show as you approach a block, not only once the pointer is inside
-    // it, so the connection dots are already there when you reach for them.
-    const near = nodeAt(p, 18 / view.zoom);
+    const near = nodeAt(p, CONNECT_BAND / view.zoom);
+    // Over a resize handle or a line's end handle, those win; no line-start
+    // marker competing with them.
+    const role = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-role');
+    const spot = armedShape || role ? null : connectSpotAt(p);
+    const spotChanged = !spot !== !connectSpot ||
+      (spot && (spot.node !== connectSpot.node || Math.hypot(spot.at.x - connectSpot.at.x, spot.at.y - connectSpot.at.y) > 0.5));
     const hoverChanged = near !== hoverNode;
     hoverNode = near;
+    connectSpot = spot;
     if (armedShape) ghost = { shape: armedShape, p };
-    if (hoverChanged || armedShape) render();
-    svg.style.cursor = armedShape ? 'crosshair'
+    if (hoverChanged || spotChanged || armedShape) render();
+    svg.style.cursor = armedShape || spot ? 'crosshair'
       : nodeAt(p) ? 'move' : legCursor(p) || (groupAt(p) ? 'move' : 'grab');
     return;
   }
@@ -1428,16 +1407,11 @@ function onPointerUp(ev) {
 }
 
 function finishEnd(d, ev) {
-  // A click on a dot, with no drag: Miro's quick-create. A new block of the
-  // same shape appears in that direction, already wired up.
+  // A plain click just outside a block's edge, with no drag: select the block,
+  // which is what a click that near it was almost certainly aiming for.
   if (!d.edge) {
-    if (!d.from) { render(); return; }
-    const shape = nextShapeAfter(d.from);
-    const [w, h] = shape === d.from.shape ? [d.from.w, d.from.h] : defaultSize(shape);
-    const dir = DIRS[d.anchor.side];
-    const reach = QUICK_GAP + (dir.x ? (d.from.w + w) / 2 : (d.from.h + h) / 2);
-    const fc = centerOf(d.from);
-    addConnected(d.from, d.anchor, shape, { x: fc.x + dir.x * reach, y: fc.y + dir.y * reach });
+    if (d.from) { sel = new Set([d.from.id]); selEdge = -1; notify(); }
+    render();
     return;
   }
   if (!d.undoPushed) { render(); return; }      // an end handle pressed and released without moving

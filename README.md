@@ -29,10 +29,14 @@ Prototype. Word desktop on Windows and Mac.
   in the middle of a block it floats on whichever side faces the other end.
   Ends dropped in empty space stay loose. A line with both ends loose drags as
   a whole.
-- Or start one from a block: hover it and drag a blue dot. Drop it on empty
-  canvas and a shape picker asks what to create there (cancel and the line
-  stays, loose). **Click** a dot instead of dragging to add a connected block
-  in that direction.
+- Or start one from a block: move the pointer just outside any edge — the
+  cursor becomes a crosshair and a single marker shows the exact spot — and
+  drag. No dots appear on blocks. Drop on empty canvas and a shape picker asks
+  what to create there (cancel and the line stays, loose).
+- Right-angled connectors are routed to stay clean: they leave and arrive
+  square to the edge, never cut through either block, and come out as one
+  straight line whenever the two ends line up. Drop an end nearly level with
+  the other and it snaps level.
 - **Hold Shift while dragging a line** — an end, a new connector, or the line
   itself — to make it straight; a loose end also snaps to 45° steps.
   **Straight** in the toolbar does the same and switches back to right angles

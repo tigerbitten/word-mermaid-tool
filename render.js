@@ -359,17 +359,89 @@ function simplify(pts) {
   return out;
 }
 
-function stubOf(p, side) {
-  return { x: p.x + DIRS[side].x * STUB, y: p.y + DIRS[side].y * STUB };
+// Where a connector's first straight run out of node `n` ends: STUB beyond the
+// node's bounding box, measured from the box rather than from the attach point.
+// On a circle or diamond the attach point can sit well inside the box, and a
+// stub measured from there would end inside it and read as cutting through.
+function stubOf(n, p, side) {
+  if (side === 'n') return { x: p.x, y: n.y - STUB };
+  if (side === 's') return { x: p.x, y: n.y + n.h + STUB };
+  if (side === 'w') return { x: n.x - STUB, y: p.y };
+  return { x: n.x + n.w + STUB, y: p.y };
 }
 
-// The bends of an untouched connector, between the two stub ends.
-function autoBends(a, s0, b, s1) {
-  const h0 = DIRS[s0].y === 0;
-  const h1 = DIRS[s1].y === 0;
-  if (h0 && h1) { const mx = (a.x + b.x) / 2; return [{ x: mx, y: a.y }, { x: mx, y: b.y }]; }
-  if (!h0 && !h1) { const my = (a.y + b.y) / 2; return [{ x: a.x, y: my }, { x: b.x, y: my }]; }
-  return h0 ? [{ x: b.x, y: a.y }] : [{ x: a.x, y: b.y }];
+// Does an axis-aligned segment pass through the inside of box `r`? Running
+// along its border doesn't count.
+function crossesBox(u, v, r) {
+  if (!r.w || !r.h) return false;
+  return Math.max(u.x, v.x) > r.x + 1 && Math.min(u.x, v.x) < r.x + r.w - 1 &&
+         Math.max(u.y, v.y) > r.y + 1 && Math.min(u.y, v.y) < r.y + r.h - 1;
+}
+
+// A right-angle route's cost, or null if it's unacceptable: a leg that isn't
+// horizontal or vertical, one that cuts through either block, or a route that
+// leaves its first block anywhere but straight out of the side it's attached
+// to (or arrives at the second any other way). Bends cost extra, so a route
+// with fewer corners wins over a marginally shorter one with more.
+function routeCost(pts, s0, A, s1, B) {
+  if (pts.length < 2) return null;
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const u = pts[i - 1];
+    const v = pts[i];
+    if (Math.abs(u.x - v.x) > 0.5 && Math.abs(u.y - v.y) > 0.5) return null;
+    len += Math.abs(u.x - v.x) + Math.abs(u.y - v.y);
+    // The first leg starts on A's outline heading out of it and the last ends
+    // on B's heading in, so each is only checked against the other block.
+    if (i > 1 && crossesBox(u, v, A)) return null;
+    if (i < pts.length - 1 && crossesBox(u, v, B)) return null;
+  }
+  const out = DIRS[s0];
+  const into = DIRS[s1];
+  const first = pts[1];
+  const last = pts[pts.length - 2];
+  const end = pts[pts.length - 1];
+  if ((first.x - pts[0].x) * out.x + (first.y - pts[0].y) * out.y <= 0) return null;
+  if ((last.x - end.x) * into.x + (last.y - end.y) * into.y <= 0) return null;
+  return len + (pts.length - 2) * 24;
+}
+
+// The bends of an automatically routed right-angle connector, between its two
+// stub ends. Rather than one fixed shape, it tries every plausible one -- a
+// straight run, a single corner, a Z through the middle or round the outside
+// of both blocks, a U -- and keeps the cheapest acceptable route (see
+// routeCost). That is what stops a connector from cutting through its own
+// blocks or doubling back when the ends face away from each other. The
+// middle-channel Z is tried first, so on a tie it wins: it's the balanced one.
+function routeBends(p0, s0, a0, A, p1, s1, b0, B) {
+  const M = STUB;
+  const midX = (a0.x + b0.x) / 2;
+  const midY = (a0.y + b0.y) / 2;
+  const xs = [Math.min(A.x, B.x) - M, Math.max(A.x + A.w, B.x + B.w) + M, a0.x, b0.x];
+  const ys = [Math.min(A.y, B.y) - M, Math.max(A.y + A.h, B.y + B.h) + M, a0.y, b0.y];
+  const cands = [
+    [{ x: midX, y: a0.y }, { x: midX, y: b0.y }],
+    [{ x: a0.x, y: midY }, { x: b0.x, y: midY }],
+    [],
+    [{ x: b0.x, y: a0.y }],
+    [{ x: a0.x, y: b0.y }],
+  ];
+  for (const x of xs) cands.push([{ x, y: a0.y }, { x, y: b0.y }]);
+  for (const y of ys) cands.push([{ x: a0.x, y }, { x: b0.x, y }]);
+  for (const x of xs.concat(midX)) {
+    for (const y of ys.concat(midY)) {
+      cands.push([{ x, y: a0.y }, { x, y }, { x: b0.x, y }]);
+      cands.push([{ x: a0.x, y }, { x, y }, { x, y: b0.y }]);
+    }
+  }
+  let best = null;
+  for (const c of cands) {
+    const cost = routeCost(simplify([p0, a0].concat(c, [b0, p1])), s0, A, s1, B);
+    if (cost != null && (!best || cost < best.cost)) best = { cost, c };
+  }
+  // Nothing acceptable (the blocks overlap, say): a single corner is the least
+  // bad thing to draw.
+  return best ? best.c : [{ x: b0.x, y: a0.y }];
 }
 
 // Joins points with right angles, adding a corner wherever two neighbours
@@ -428,27 +500,40 @@ function edgeRoutes(d) {
     const ta = e.toAnchor || {};
     return {
       a, b,
-      from: { side: fa.side || facingSide(a, b), t: fa.t, other: b },
-      to: { side: ta.side || facingSide(b, a), t: ta.t, other: a },
+      from: { side: fa.side || facingSide(a, b), t: fa.t, other: b, pinned: fa.t != null },
+      to: { side: ta.side || facingSide(b, a), t: ta.t, other: a, pinned: ta.t != null },
     };
   });
 
+  // Every end on each side of each block: the automatic ones to be spaced out,
+  // and the pinned ones, whose spots the automatic ones must keep clear of --
+  // otherwise an automatic line happily leaves from the very spot a pinned one
+  // does and the two run on top of each other.
   const buckets = new Map();
   for (const s of slots) {
     if (!s || s.self || s.straight) continue;
     for (const [end, node] of [[s.from, s.a], [s.to, s.b]]) {
-      if (end.t != null) continue;
       const key = node.id + end.side;
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(end);
+      if (!buckets.has(key)) buckets.set(key, { free: [], pinned: [] });
+      buckets.get(key)[end.t != null ? 'pinned' : 'free'].push(end);
     }
   }
-  for (const list of buckets.values()) {
+  for (const { free, pinned } of buckets.values()) {
+    if (!free.length) continue;
     // Order the fan by where the other end actually sits, so connectors don't
     // cross each other on the way out.
-    const axis = list[0].side === 'n' || list[0].side === 's' ? 'x' : 'y';
-    list.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis]);
-    list.forEach((end, i) => { end.t = (i + 1) / (list.length + 1); end.solo = list.length === 1; });
+    const axis = free[0].side === 'n' || free[0].side === 's' ? 'x' : 'y';
+    free.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis]);
+    // Evenly spaced spots for every end on the side; each pinned end claims
+    // the spot nearest it, and the automatic ones take the rest in order.
+    const n = free.length + pinned.length;
+    const spots = Array.from({ length: n }, (_, i) => (i + 1) / (n + 1));
+    for (const p of pinned) {
+      let k = 0;
+      spots.forEach((t, i) => { if (Math.abs(t - p.t) < Math.abs(spots[k] - p.t)) k = i; });
+      spots.splice(k, 1);
+    }
+    free.forEach((end, i) => { end.t = spots[i]; end.solo = n === 1; });
   }
 
   // Two blocks facing each other with some overlap get a dead straight
@@ -456,18 +541,30 @@ function edgeRoutes(d) {
   // with a tiny kink because their centres are two pixels apart. Only when
   // both ends are automatic and alone on their side -- a pinned port or a fan
   // takes precedence.
+  // Likewise when one end was attached at an exact spot: a free end on a
+  // facing block lines up with it, so a connector dropped level with the other
+  // block comes out dead straight rather than with a small jog in it.
   for (const s of slots) {
-    if (!s || s.self || s.straight || !s.from.solo || !s.to.solo) continue;
+    if (!s || s.self || s.straight) continue;
     const horiz = (s.from.side === 'e' && s.to.side === 'w') || (s.from.side === 'w' && s.to.side === 'e');
     const vert = (s.from.side === 's' && s.to.side === 'n') || (s.from.side === 'n' && s.to.side === 's');
     if (!horiz && !vert) continue;
     const [pos, len] = horiz ? ['y', 'h'] : ['x', 'w'];
-    const lo = Math.max(s.a[pos], s.b[pos]);
-    const hi = Math.min(s.a[pos] + s.a[len], s.b[pos] + s.b[len]);
-    if (hi - lo < 8) continue;
-    const mid = (lo + hi) / 2;
-    s.from.t = (mid - s.a[pos]) / s.a[len];
-    s.to.t = (mid - s.b[pos]) / s.b[len];
+    const within = (n, c) => n[len] && c >= n[pos] + 2 && c <= n[pos] + n[len] - 2;
+    if (s.from.solo && s.to.solo) {
+      const lo = Math.max(s.a[pos], s.b[pos]);
+      const hi = Math.min(s.a[pos] + s.a[len], s.b[pos] + s.b[len]);
+      if (hi - lo < 8) continue;
+      const mid = (lo + hi) / 2;
+      s.from.t = (mid - s.a[pos]) / s.a[len];
+      s.to.t = (mid - s.b[pos]) / s.b[len];
+    } else if (s.from.solo && s.to.pinned) {
+      const c = anchorPoint(s.b, s.to.side, s.to.t)[pos];
+      if (within(s.a, c)) s.from.t = (c - s.a[pos]) / s.a[len];
+    } else if (s.to.solo && s.from.pinned) {
+      const c = anchorPoint(s.a, s.from.side, s.from.t)[pos];
+      if (within(s.b, c)) s.to.t = (c - s.b[pos]) / s.b[len];
+    }
   }
 
   return slots.map((s, i) => {
@@ -483,10 +580,10 @@ function edgeRoutes(d) {
     }
     const p0 = anchorPoint(s.a, s.from.side, s.from.t);
     const p1 = anchorPoint(s.b, s.to.side, s.to.t);
-    const a0 = stubOf(p0, s.from.side);
-    const b0 = stubOf(p1, s.to.side);
+    const a0 = stubOf(s.a, p0, s.from.side);
+    const b0 = stubOf(s.b, p1, s.to.side);
     const bends = d.edges[i].points && d.edges[i].points.length
-      ? d.edges[i].points : autoBends(a0, s.from.side, b0, s.to.side);
+      ? d.edges[i].points : routeBends(p0, s.from.side, a0, s.a, p1, s.to.side, b0, s.b);
     return {
       raw: joinOrthogonal([p0, a0].concat(bends, [b0, p1])),
       from: { side: s.from.side, t: s.from.t },
