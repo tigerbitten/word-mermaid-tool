@@ -22,7 +22,10 @@ Prototype. Word desktop on Windows and Mac.
   start typing. Enter or Esc finishes (keeping what you typed), Shift+Enter
   gives you a second line. Double-clicking a connector edits its label the
   same way.
-- **Lines work like Miro's.** Drag an **Arrow** or **Line** from the top of
+- **Click-click lines.** Click **Arrow** or **Line** in the palette, click
+  where it starts — on a block's edge, or anywhere — then click where it ends.
+  The line follows the pointer in between; Esc cancels.
+- **Lines work like Miro's.** Or drag an **Arrow** or **Line** from the top of
   the palette and drop it anywhere; drag either end onto a block to attach it.
   An end dropped near a block's edge attaches at exactly that spot — any point
   along any edge, on the real curve of a circle or slope of a diamond; dropped
@@ -55,6 +58,7 @@ Prototype. Word desktop on Windows and Mac.
   remove it, drop a block in to add it (the group lights up green as you do).
   Selecting a block outlines its group and tints the other members; the
   toolbar and right-click menu name the group and offer *Add to…* / *Remove*.
+  Select a group to change its title size.
 - Drag empty canvas or scroll to pan; Ctrl+scroll or pinch to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
   in (from an LLM, say). Your edits apply when you go back to the canvas.

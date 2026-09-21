@@ -568,6 +568,44 @@ function addLine(kind, c) {
   commit();
 }
 
+// The Arrow / Line tool, click-click: the first click fixes where the line
+// starts -- the exact spot on a block's edge when it's on or beside a block,
+// else a loose end there -- and the line then follows the pointer until a
+// second click fixes the other end the same way. It is the ordinary
+// end-dragging code (moveEnd), just without the button held down.
+function startTwoClick(kind, p, ev) {
+  pushUndo();
+  const block = nodeAt(p, CONNECT_BAND / view.zoom);
+  let from;
+  let fromAnchor = null;
+  if (block) {
+    const hit = nearestOnOutline(block, p);
+    from = block;
+    fromAnchor = { side: hit.side, t: hit.t };
+  } else {
+    from = makeNode('point', p);
+  }
+  const end = makeNode('point', p);
+  const e = newEdge(from.id, end.id);
+  e.fromAnchor = fromAnchor;
+  e.route = 'straight';
+  e.head = kind === 'arrow' ? 'end' : 'none';
+  model.edges.push(e);
+  sel = new Set();
+  selEdge = model.edges.length - 1;
+  connectSpot = null;
+  drag = { mode: 'end', edge: e, end: 'to', point: end, undoPushed: true, twoClick: true, sx: ev.clientX, sy: ev.clientY };
+  render();
+}
+
+function finishTwoClick(ev) {
+  moveEnd(ev, toModel(ev));
+  // A second click on top of the first has nothing to draw between them.
+  if (Math.hypot(ev.clientX - drag.sx, ev.clientY - drag.sy) < 4) { cancelDrag(); return; }
+  drag = null;
+  commit();
+}
+
 // Whatever the palette hands over: a shape, or `line:arrow` / `line:plain`.
 function place(shape, c) {
   if (shape.startsWith('line:')) addLine(shape.slice(5), c);
@@ -680,6 +718,16 @@ function applyToNodes(fn) {
   if (!nodes.length) return;
   pushUndo();
   nodes.forEach(fn);
+  commit();
+}
+
+// For the selected group boundaries themselves (their title size), as opposed
+// to applyToNodes, which reaches through a selected group to its blocks.
+function applyToGroups(fn) {
+  const groups = model.groups.filter((g) => sel.has(g.id));
+  if (!groups.length) return;
+  pushUndo();
+  groups.forEach(fn);
   commit();
 }
 
@@ -864,7 +912,7 @@ function pasteClipboard(dx, dy) {
   const madeGroups = [];
   for (const g of clipboard.groups || []) {
     const copy = { id: makeId(g.label, taken), label: g.label, members: g.members.map((m) => remap[m]),
-                   x: 0, y: 0, w: 0, h: 0 };
+                   fontSize: g.fontSize, x: 0, y: 0, w: 0, h: 0 };
     taken.add(copy.id);
     model.groups.push(copy);
     madeGroups.push(copy.id);
@@ -917,6 +965,7 @@ function redo() {
 
 function onPointerDown(ev) {
   if (pendingConnect) return;     // the shape picker is open; it owns the next click
+  if (drag && drag.twoClick) { finishTwoClick(ev); return; }
   // Any press on the canvas finishes an open label edit. Normally the textarea
   // losing focus does that, but if it never had focus (the host can refuse
   // it) no blur ever arrives and the box would sit there for good.
@@ -951,6 +1000,7 @@ function onPointerDown(ev) {
     const shape = armedShape;
     armedShape = null;
     ghost = null;
+    if (shape.startsWith('line:')) { startTwoClick(shape.slice(5), p, ev); return; }
     place(shape, p);
     notify();
     return;
@@ -1257,13 +1307,24 @@ function onPointerMove(ev) {
     // Over a resize handle or a line's end handle, those win; no line-start
     // marker competing with them.
     const role = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-role');
-    const spot = armedShape || role ? null : connectSpotAt(p);
+    // With the Arrow or Line tool picked, the marker shows where the line
+    // will start: on the nearest edge when over or beside a block, else at the
+    // pointer. Otherwise it's the ordinary start-a-line band.
+    const lineTool = !!armedShape && armedShape.startsWith('line:');
+    let spot = null;
+    if (lineTool) {
+      const b = nodeAt(p, CONNECT_BAND / view.zoom);
+      const hit = b && nearestOnOutline(b, p);
+      spot = b ? { node: b, side: hit.side, t: hit.t, at: hit.at } : { node: null, at: p };
+    } else if (!armedShape && !role) {
+      spot = connectSpotAt(p);
+    }
     const spotChanged = !spot !== !connectSpot ||
       (spot && (spot.node !== connectSpot.node || Math.hypot(spot.at.x - connectSpot.at.x, spot.at.y - connectSpot.at.y) > 0.5));
     const hoverChanged = near !== hoverNode;
     hoverNode = near;
     connectSpot = spot;
-    if (armedShape) ghost = { shape: armedShape, p };
+    if (armedShape) ghost = lineTool ? null : { shape: armedShape, p };
     if (hoverChanged || spotChanged || armedShape) render();
     svg.style.cursor = armedShape || spot ? 'crosshair'
       : nodeAt(p) ? 'move' : legCursor(p) || (groupAt(p) ? 'move' : 'grab');
@@ -1385,6 +1446,7 @@ function onPointerMove(ev) {
 
 function onPointerUp(ev) {
   if (!drag) return;
+  if (drag.twoClick) return;     // a click-click line carries on past the first click's release
   const d = drag;
   drag = null;
 
@@ -1508,6 +1570,7 @@ function isDragging() { return !!drag || !!pendingConnect; }
 function onContext(ev) {
   ev.preventDefault();
   if (pendingConnect) return;
+  if (drag && drag.twoClick) { cancelDrag(); return; }   // right-click abandons a half-placed line
   const p = toModel(ev);
   menuPoint = p;
   armedShape = null;
@@ -1539,7 +1602,7 @@ function onDoubleClick(ev) {
   const ei = edgeAt(p);
   if (ei >= 0) { selEdge = ei; sel = new Set(); render(); editEdgeLabel(ei); return; }
   const g = groupAt(p);
-  if (g && p.y <= g.y + GROUP_TITLE_H) beginLabelEdit(g);
+  if (g && p.y <= g.y + groupTitleH(g)) beginLabelEdit(g);
   // Double-clicking empty canvas does nothing. It used to create a block,
   // which mostly meant stray "Block" boxes left behind by a double-click that
   // was only meant to select or zoom. New blocks come from the palette, from
@@ -1572,9 +1635,9 @@ function beginLabelEdit(item, seed, box) {
   // a text box the size of the group, with the name floating in the middle
   // of it, reads as broken.
   const isGroup = !!item.members;
-  if (isGroup && !box) box = { x: item.x, y: item.y - 4, w: Math.min(item.w, 240), h: GROUP_TITLE_H + 8 };
+  if (isGroup && !box) box = { x: item.x, y: item.y - 4, w: Math.max(groupTabWidth(item) + 40, Math.min(item.w, 240)), h: groupTitleH(item) + 8 };
   const b = box || item;
-  const fontSize = item.fontSize || (item.from ? DEFAULT_EDGE_FONT : DEFAULT_FONT_SIZE);
+  const fontSize = item.fontSize || (isGroup ? GROUP_FONT_SIZE : item.from ? DEFAULT_EDGE_FONT : DEFAULT_FONT_SIZE);
   const size = fontSize * view.zoom;
   const lh = lineH(fontSize) * view.zoom;
   const boxH = Math.max(30, (b.h || 32) * view.zoom);
@@ -1588,7 +1651,7 @@ function beginLabelEdit(item, seed, box) {
   input.style.width = Math.max(90, b.w * view.zoom) + 'px';
   input.style.height = boxH + 'px';
   input.style.fontSize = Math.max(11, size) + 'px';
-  if (item.bold) input.style.fontWeight = 'bold';
+  if (item.bold || isGroup) input.style.fontWeight = 'bold';     // group titles are always bold
   // Textareas top-align their text; pad it down so the text sits where it will
   // sit once committed instead of jumping when the editor closes.
   input.style.paddingTop = Math.max(2, (boxH - rows * lh) / 2) + 'px';

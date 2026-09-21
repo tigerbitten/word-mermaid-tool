@@ -261,12 +261,20 @@ function drawNode(parent, n) {
 function drawGroup(parent, g) {
   const node = el('g', { 'data-id': g.id, 'data-kind': 'group' }, parent);
   el('rect', { x: g.x, y: g.y, width: g.w, height: g.h, rx: 8, class: 'wm-group' }, node);
-  el('rect', { x: g.x, y: g.y, width: groupTabWidth(g), height: GROUP_TITLE_H, rx: 6, class: 'wm-group-tab' }, node);
-  el('text', { x: g.x + 10, y: g.y + GROUP_TITLE_H / 2, class: 'wm-group-title' }, node).textContent = g.label;
+  const size = g.fontSize || GROUP_FONT_SIZE;
+  el('rect', { x: g.x, y: g.y, width: groupTabWidth(g), height: groupTitleH(g), rx: 6, class: 'wm-group-tab' }, node);
+  const title = el('text', { x: g.x + size * 0.8, y: g.y + groupTitleH(g) / 2, class: 'wm-group-title' }, node);
+  if (size !== GROUP_FONT_SIZE) title.style.fontSize = size + 'px';
+  title.textContent = g.label;
   return node;
 }
 
-function groupTabWidth(g) { return Math.min(g.w, textWidth(g.label, 12, true) + 20); }
+// Sized to the title. Not capped at the group's width: a big title on a
+// narrow group overhangs rather than being cut off mid-word.
+function groupTabWidth(g) {
+  const size = g.fontSize || GROUP_FONT_SIZE;
+  return textWidth(g.label, size, true) + size * 1.6;
+}
 
 // --- edge routing -------------------------------------------------------
 //
@@ -748,7 +756,7 @@ function diagramBounds(d) {
     add(cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2);
   }
   for (const g of d.groups) {
-    if (g.w > 0) add(g.x, g.y, g.x + 10 + textWidth(g.label, 12, true) + 4, g.y + GROUP_TITLE_H);
+    if (g.w > 0) add(g.x, g.y, g.x + groupTabWidth(g), g.y + groupTitleH(g));
   }
   edgeGeometry(d).forEach((pts, i) => {
     if (!pts || pts.length < 2) return;

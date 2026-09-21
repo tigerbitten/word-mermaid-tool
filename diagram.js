@@ -244,6 +244,10 @@ function toMermaid(d) {
     const s = styleDecl(n);
     if (s) lines.push('  ' + s);
   }
+  // A group's title size, as a standard `style` on the subgraph.
+  for (const g of d.groups) {
+    if (g.fontSize && g.fontSize !== GROUP_FONT_SIZE) lines.push('  style ' + g.id + ' font-size:' + g.fontSize + 'px');
+  }
   d.edges.forEach((e, i) => {
     const s = linkStyleDecl(e, i);
     if (s) lines.push('  ' + s);
@@ -579,6 +583,11 @@ function parseMermaid(text) {
     d.nodes.sort((p, q) => rank(p) - rank(q));
   }
 
+  for (const g of d.groups) {
+    const size = (styles[g.id] || '').match(/font-size:\s*([\d.]+)/);
+    if (size) g.fontSize = +size[1];
+  }
+
   // Groups own their members, so a node listed in two is a contradiction;
   // first one wins.
   const claimed = new Set();
@@ -646,6 +655,12 @@ function applyLayout(d, layout) {
 // independently of them -- so moving a node can't leave the box behind.
 const GROUP_PAD = 18;
 const GROUP_TITLE_H = 22;
+const GROUP_FONT_SIZE = 12;
+
+// The title tab grows with the title's text size, and the box with it.
+function groupTitleH(g) {
+  return Math.max(GROUP_TITLE_H, Math.round((g.fontSize || GROUP_FONT_SIZE) * 1.8));
+}
 
 function fitGroup(d, g) {
   const members = g.members.map((id) => nodeById(d, id)).filter(Boolean);
@@ -655,7 +670,7 @@ function fitGroup(d, g) {
   const x1 = Math.max(...members.map((n) => n.x + n.w));
   const y1 = Math.max(...members.map((n) => n.y + n.h));
   g.x = x0 - GROUP_PAD;
-  g.y = y0 - GROUP_PAD - GROUP_TITLE_H;
+  g.y = y0 - GROUP_PAD - groupTitleH(g);
   g.w = (x1 - x0) + GROUP_PAD * 2;
-  g.h = (y1 - y0) + GROUP_PAD * 2 + GROUP_TITLE_H;
+  g.h = (y1 - y0) + GROUP_PAD * 2 + groupTitleH(g);
 }
