@@ -33,11 +33,16 @@ const EDITOR_STYLE = `
 `;
 
 const PAGE_STYLE = `
-  .wm-host { position: relative; overflow: hidden; background: #fff; }
+  /* No text selection on the canvas: a drag across it otherwise starts the
+     browser's own selection, which lit up labels and buttons in blue as the
+     pointer swept past them. */
+  .wm-host { position: relative; overflow: hidden; background: #fff;
+    user-select: none; -webkit-user-select: none; }
   .wm-label-input { position: absolute; z-index: 5; box-sizing: border-box; text-align: center;
     font-family: Calibri, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.25;
     border: 2px solid #2563eb; border-radius: 3px; padding: 3px 4px; outline: none;
     resize: none; overflow: hidden; background: #fff; color: #111;
+    user-select: text; -webkit-user-select: text;
     box-shadow: 0 2px 10px rgba(0,0,0,0.15); }
 `;
 
@@ -276,6 +281,10 @@ function drawChrome() {
     }
   }
 
+  // No dots mid-gesture (panning, moving, resizing, marquee) -- only while
+  // wiring, where they are the target. Otherwise the last block the pointer
+  // passed over kept its dots lit while the canvas slid around under it.
+  if (drag && !wire) portNode = null;
   if (portNode && !pendingConnect) {
     for (const p of portSpots(portNode)) {
       // The dots float just outside the border, the way Miro draws them, so
@@ -325,6 +334,7 @@ function drawEdgeChrome(s) {
   if (!pts) return;
   el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
   if (e.from === e.to) return;
+  if (e.route === 'straight') { drawEndHandles(pts, s); return; }   // a straight line has no legs to drag
   // A grip on each leg long enough to grab, so it's obvious the path can be
   // dragged. Purely visual: the press lands on the connector itself. Where the
   // label sits the grip would cover the text, so the grip goes at the leg's
@@ -352,7 +362,11 @@ function drawEdgeChrome(s) {
       class: 'wm-seghandle', 'stroke-width': 1.5 * s,
     }, chrome);
   }
-  // The two ends: drag one onto another block to reconnect it, as in Miro.
+  drawEndHandles(pts, s);
+}
+
+// The two ends: drag one onto another block to reconnect it, as in Miro.
+function drawEndHandles(pts, s) {
   if (drag && drag.mode === 'reattach') return;
   for (const [end, p] of [['from', pts[0]], ['to', pts[pts.length - 1]]]) {
     el('circle', {
@@ -684,6 +698,19 @@ function resetEdgePath() {
   applyToEdge((e) => { e.points = null; });
 }
 
+// Straight line <-> right angles. The ports and any hand-drawn bends are kept,
+// just not used while straight, so switching back restores the old path.
+function toggleStraight() {
+  applyToEdge((e) => { e.route = e.route === 'straight' ? 'elbow' : 'straight'; });
+}
+
+function setAllRoutes(route) {
+  if (!model.edges.length) return;
+  pushUndo();
+  for (const e of model.edges) e.route = route;
+  commit();
+}
+
 // Swaps which end the arrow points at. Anchors and bends swap with it so the
 // line itself doesn't move -- only the direction it's read in.
 function reverseEdge() {
@@ -709,7 +736,8 @@ function toggleBold() {
 function copyStyle() {
   const e = selEdge >= 0 ? model.edges[selEdge] : null;
   const n = selectedNodes()[0];
-  if (e) styleClipboard = { kind: 'edge', dash: e.dash, head: e.head, width: e.width, color: e.color, fontSize: e.fontSize, bold: e.bold };
+  if (e) styleClipboard = { kind: 'edge', dash: e.dash, head: e.head, width: e.width, color: e.color,
+                            fontSize: e.fontSize, bold: e.bold, route: e.route };
   else if (n) styleClipboard = { kind: 'node', fill: n.fill, fontSize: n.fontSize, bold: n.bold };
   else return false;
   return true;
@@ -981,6 +1009,7 @@ function onPointerDown(ev) {
   }
   sel = new Set();
   selEdge = -1;
+  hoverNode = null;
   drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
   svg.style.cursor = 'grabbing';
   render();
@@ -1244,7 +1273,14 @@ function onPointerUp(ev) {
   if (d.mode === 'connect') { finishConnect(d, ev); return; }
   if (d.mode === 'reattach') { finishReattach(d, ev); return; }
   if (d.mode === 'marquee') { render(); notify(); return; }
-  if (d.mode === 'pan') { svg.style.cursor = 'default'; render(); return; }
+  if (d.mode === 'pan') {
+    // Hover is re-read where the pointer came to rest, rather than left over
+    // from wherever it was when the pan began.
+    hoverNode = nodeAt(toModel(ev), 18 / view.zoom);
+    svg.style.cursor = 'default';
+    render();
+    return;
+  }
   if (d.undoPushed) { commit(); return; }
   // A click that never became a drag: now it's safe to shrink the selection.
   if (d.onRelease === 'deselect') sel.delete(d.hit);

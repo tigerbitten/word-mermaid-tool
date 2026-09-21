@@ -29,6 +29,10 @@ Prototype. Word desktop on Windows and Mac.
 - To reconnect: select a connector and drag either of its end dots onto a
   different block. To reroute: drag any leg of it sideways; the path stays
   square. *Reset path* goes back to automatic routing.
+- **Straight** in a connector's toolbar makes it one direct line from block to
+  block, at whatever angle; press it again for right angles (any path you
+  drew by hand comes back). Right-click empty canvas to switch every
+  connector at once.
 - Dragging a block snaps it into line with the blocks around it — edges and
   centres — with a pink guide showing what it lined up with.
 - Drag a corner or side handle to resize; hold Shift on a corner to keep the
@@ -85,8 +89,9 @@ The whole payload is valid Mermaid — paste it into mermaid.live and it renders
 The `%%` lines are Mermaid comments, ignored by every renderer; they're how this
 tool remembers where you put each block, since Mermaid itself has no way to
 express node positions. A `%% link` line records which side of a block a
-connector was pinned to, and a `%% path` line records the bends of a connector
-you rerouted by hand; neither appears unless you did that.
+connector was pinned to, a `%% path` line records the bends of a connector
+you rerouted by hand, and `%% route … straight` marks a straightened one; none
+of them appear unless you did that.
 
 Everything else rides in standard Mermaid: fills and text sizes are `style`
 statements, connector thickness is a `linkStyle` statement, and a heavy

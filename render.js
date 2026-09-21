@@ -286,6 +286,23 @@ function facingSide(a, b) {
   return Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'e' : 'w') : (dy >= 0 ? 's' : 'n');
 }
 
+// Where the line from a node's centre towards `toward` leaves its outline.
+// Round and diamond shapes are met at their real edge -- a straight connector
+// stopping at the invisible box around a circle looks like it missed.
+function outlinePoint(n, toward) {
+  const c = centerOf(n);
+  const dx = toward.x - c.x;
+  const dy = toward.y - c.y;
+  if (!dx && !dy) return c;
+  const rx = n.w / 2;
+  const ry = n.h / 2;
+  let t;
+  if (['circle', 'doublecircle', 'junction', 'sum'].includes(n.shape)) t = 1 / Math.hypot(dx / rx, dy / ry);
+  else if (n.shape === 'diamond') t = 1 / (Math.abs(dx) / rx + Math.abs(dy) / ry);
+  else t = Math.min(dx ? rx / Math.abs(dx) : Infinity, dy ? ry / Math.abs(dy) : Infinity);
+  return { x: c.x + dx * t, y: c.y + dy * t };
+}
+
 // `t` runs 0..1 along the side, left-to-right or top-to-bottom.
 function anchorPoint(n, side, t) {
   if (side === 'n') return { x: n.x + n.w * t, y: n.y };
@@ -372,6 +389,9 @@ function edgeRoutes(d) {
     const b = nodeById(d, e.to);
     if (!a || !b) return null;
     if (a === b) return { a, self: true };
+    // A straight connector runs centre to centre, cut off at each outline. It
+    // takes no port and joins no fan-out, so it skips everything below.
+    if (e.route === 'straight') return { a, b, straight: true };
     const fa = e.fromAnchor || {};
     const ta = e.toAnchor || {};
     return {
@@ -383,7 +403,7 @@ function edgeRoutes(d) {
 
   const buckets = new Map();
   for (const s of slots) {
-    if (!s || s.self) continue;
+    if (!s || s.self || s.straight) continue;
     for (const [end, node] of [[s.from, s.a], [s.to, s.b]]) {
       if (end.t != null) continue;
       const key = node.id + end.side;
@@ -405,7 +425,7 @@ function edgeRoutes(d) {
   // both ends are automatic and alone on their side -- a pinned port or a fan
   // takes precedence.
   for (const s of slots) {
-    if (!s || s.self || !s.from.solo || !s.to.solo) continue;
+    if (!s || s.self || s.straight || !s.from.solo || !s.to.solo) continue;
     const horiz = (s.from.side === 'e' && s.to.side === 'w') || (s.from.side === 'w' && s.to.side === 'e');
     const vert = (s.from.side === 's' && s.to.side === 'n') || (s.from.side === 'n' && s.to.side === 's');
     if (!horiz && !vert) continue;
@@ -421,6 +441,9 @@ function edgeRoutes(d) {
   return slots.map((s, i) => {
     if (!s) return null;
     if (s.self) return { self: true, raw: selfLoopPoints(s.a) };
+    if (s.straight) {
+      return { straight: true, raw: [outlinePoint(s.a, centerOf(s.b)), outlinePoint(s.b, centerOf(s.a))] };
+    }
     const p0 = anchorPoint(s.a, s.from.side, s.from.t);
     const p1 = anchorPoint(s.b, s.to.side, s.to.t);
     const a0 = stubOf(p0, s.from.side);

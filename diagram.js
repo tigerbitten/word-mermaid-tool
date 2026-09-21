@@ -3,7 +3,7 @@
 // A diagram is a plain object:
 //   { direction,
 //     nodes: [{id,label,shape,x,y,w,h,fill,fontSize,bold}],
-//     edges: [{from,to,label,dash,head,width,color,fontSize,bold,
+//     edges: [{from,to,label,dash,head,width,color,fontSize,bold,route,
 //              fromAnchor,toAnchor,points}],
 //     groups: [{id,label,members:[nodeId],x,y,w,h}] }
 //
@@ -90,8 +90,11 @@ function newDiagram() {
 }
 
 function newEdge(from, to) {
+  // `route` is 'elbow' (right angles, the default) or 'straight' (one direct
+  // line, at whatever angle the two blocks sit).
   return { from, to, label: '', dash: 'solid', head: 'end', width: DEFAULT_EDGE_W, color: null,
-           fontSize: DEFAULT_EDGE_FONT, bold: false, fromAnchor: null, toAnchor: null, points: null };
+           fontSize: DEFAULT_EDGE_FONT, bold: false, route: 'elbow',
+           fromAnchor: null, toAnchor: null, points: null };
 }
 
 function defaultSize(shape) {
@@ -247,6 +250,7 @@ function toMermaid(d) {
     if (e.points && e.points.length) {
       lines.push('%% path ' + i + ' ' + e.points.map((p) => Math.round(p.x) + ',' + Math.round(p.y)).join(' '));
     }
+    if (e.route === 'straight') lines.push('%% route ' + i + ' straight');
   });
 
   return lines.join('\n');
@@ -413,6 +417,7 @@ function parseMermaid(text) {
   const layout = {};
   const anchors = {};
   const paths = {};
+  const routes = {};
   const linkStyles = {};
   const styles = {};
   let groupStack = [];
@@ -458,6 +463,8 @@ function parseMermaid(text) {
       });
       continue;
     }
+    const routeMatch = line.match(/^%%\s+route\s+(\d+)\s+(straight|elbow)\s*$/);
+    if (routeMatch) { routes[+routeMatch[1]] = routeMatch[2]; continue; }
     if (line.startsWith('%%')) continue;
 
     const header = line.match(/^(?:flowchart|graph)(?:\s+(TD|TB|LR|RL|BT))?\s*;?$/i);
@@ -546,6 +553,7 @@ function parseMermaid(text) {
     if (/font-weight:\s*(bold|[6-9]00)/.test(decl)) e.bold = true;
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
     if (paths[i]) e.points = paths[i];
+    if (routes[i]) e.route = routes[i];
   });
 
   // Node order is stacking order (front to back is what Bring to front
