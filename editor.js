@@ -18,6 +18,7 @@ const EDITOR_STYLE = `
   .wm-rubber { fill: none; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-marquee { fill: #2563eb; fill-opacity: 0.08; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-droptarget { fill: none; stroke: #16a34a; }
+  .wm-seghandle { fill: #fff; stroke: #2563eb; pointer-events: none; }
 `;
 
 const PAGE_STYLE = `
@@ -176,7 +177,24 @@ function drawChrome() {
 
   if (selEdge >= 0 && model.edges[selEdge]) {
     const pts = edgeGeometry(model)[selEdge];
-    if (pts) el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
+    if (pts) {
+      el('path', { d: roundedPathD(pts, CORNER_R), class: 'wm-seledge', 'stroke-width': 7 * s }, chrome);
+      // A grip on each leg long enough to grab, so it's obvious the path can
+      // be dragged. Purely visual: the press lands on the connector itself.
+      const self = model.edges[selEdge].from === model.edges[selEdge].to;
+      for (let j = 1; j < pts.length && !self; j++) {
+        const a = pts[j - 1];
+        const b = pts[j];
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 24 * s) continue;
+        const horizontal = Math.abs(a.y - b.y) < 0.5;
+        const w = (horizontal ? 14 : 6) * s;
+        const h = (horizontal ? 6 : 14) * s;
+        el('rect', {
+          x: (a.x + b.x) / 2 - w / 2, y: (a.y + b.y) / 2 - h / 2, width: w, height: h, rx: 2 * s,
+          class: 'wm-seghandle', 'stroke-width': 1.5 * s,
+        }, chrome);
+      }
+    }
   }
 
   if (drag && drag.mode === 'marquee') {
@@ -271,9 +289,34 @@ function edgeAt(p) {
   for (let i = geom.length - 1; i >= 0; i--) {
     const pts = geom[i];
     if (!pts) continue;
-    for (let j = 1; j < pts.length; j++) if (distToSeg(p, pts[j - 1], pts[j]) < 7) return i;
+    for (let j = 1; j < pts.length; j++) if (distToSeg(p, pts[j - 1], pts[j]) < 7 / view.zoom + 2) return i;
   }
   return -1;
+}
+
+// Which leg of an edge's raw route is under the pointer, as the index of its
+// first point, or -1 if the edge can't be reshaped there. The very first and
+// last legs are the stubs welded to the blocks; grabbing one of those moves
+// the leg next to it instead, which is what puts a jog in beside the block.
+function legAt(route, p) {
+  const q = route.raw;
+  if (route.self || q.length < 4) return -1;
+  let k = 0;
+  let best = Infinity;
+  for (let j = 0; j < q.length - 1; j++) {
+    const dd = distToSeg(p, q[j], q[j + 1]);
+    if (dd < best) { best = dd; k = j; }
+  }
+  return Math.max(1, Math.min(q.length - 3, k));
+}
+
+// Every edge whose two ends are both in `ids`, with a copy of its bends. When
+// a set of blocks moves together their hand-drawn connectors have to come
+// along; left behind, every internal path would spring into knots.
+function riders(ids) {
+  return model.edges
+    .filter((e) => e.points && ids.has(e.from) && ids.has(e.to))
+    .map((e) => ({ e, points: e.points.map((q) => ({ ...q })) }));
 }
 
 function marqueeBox(d) {
@@ -398,6 +441,12 @@ function applyToEdge(fn) {
   commit();
 }
 
+// Back to automatic routing. The ports stay pinned -- they were chosen by
+// hand, and only the bends are being thrown away.
+function resetEdgePath() {
+  applyToEdge((e) => { e.points = null; });
+}
+
 function reorderSelection(toFront) {
   const nodes = selectedNodes();
   if (!nodes.length) return;
@@ -453,6 +502,10 @@ function pasteClipboard(dx, dy) {
     const copy = JSON.parse(JSON.stringify(e));
     copy.from = remap[e.from];
     copy.to = remap[e.to];
+    // Shifted by exactly what the blocks moved (blocks sit on the grid, so
+    // that's the snapped offset) and not snapped individually: bends lined
+    // up with a port are usually off-grid, and snapping them puts a kink in.
+    if (copy.points) copy.points = copy.points.map((q) => ({ x: q.x + snap(dx), y: q.y + snap(dy) }));
     model.edges.push(copy);
   }
   sel = new Set(made);
@@ -529,7 +582,25 @@ function onPointerDown(ev) {
     if (ev.shiftKey) { sel.has(n.id) ? sel.delete(n.id) : sel.add(n.id); }
     else if (!sel.has(n.id)) sel = new Set([n.id]);
     selEdge = -1;
-    drag = { mode: 'move', start: p, boxes: selectedNodes().map((m) => ({ n: m, x: m.x, y: m.y })) };
+    startMove(p);
+    render();
+    notify();
+    return;
+  }
+
+  // Connectors before groups: a connector running along a group's border band
+  // would otherwise be impossible to pick up.
+  const ei = edgeAt(p);
+  if (ei >= 0) {
+    selEdge = ei;
+    sel = new Set();
+    const route = edgeRoutes(model)[ei];
+    const k = legAt(route, p);
+    if (k >= 0) {
+      const q = route.raw;
+      const horizontal = Math.abs(q[k].y - q[k + 1].y) < 0.5;
+      drag = { mode: 'segment', edge: model.edges[ei], route, k, axis: horizontal ? 'y' : 'x' };
+    }
     render();
     notify();
     return;
@@ -539,16 +610,7 @@ function onPointerDown(ev) {
   if (g) {
     sel = ev.shiftKey ? new Set([...sel, g.id]) : new Set([g.id]);
     selEdge = -1;
-    drag = { mode: 'move', start: p, boxes: selectedNodes().map((m) => ({ n: m, x: m.x, y: m.y })) };
-    render();
-    notify();
-    return;
-  }
-
-  const ei = edgeAt(p);
-  if (ei >= 0) {
-    selEdge = ei;
-    sel = new Set();
+    startMove(p);
     render();
     notify();
     return;
@@ -570,6 +632,25 @@ function onPointerDown(ev) {
   notify();
 }
 
+// The resize cursor over a connector leg tells you which way it will move.
+function legCursor(p) {
+  const ei = edgeAt(p);
+  if (ei < 0) return null;
+  const route = edgeRoutes(model)[ei];
+  const k = legAt(route, p);
+  if (k < 0) return 'pointer';
+  return Math.abs(route.raw[k].y - route.raw[k + 1].y) < 0.5 ? 'ns-resize' : 'ew-resize';
+}
+
+function startMove(p) {
+  const nodes = selectedNodes();
+  drag = {
+    mode: 'move', start: p,
+    boxes: nodes.map((m) => ({ n: m, x: m.x, y: m.y })),
+    riders: riders(new Set(nodes.map((m) => m.id))),
+  };
+}
+
 // Undo is snapshotted on the first movement rather than on pointerdown, so a
 // click that never turns into a drag doesn't fill the stack with no-ops.
 function ensureUndo() {
@@ -588,7 +669,7 @@ function onPointerMove(ev) {
       hoverNode = near;
       render();
     }
-    svg.style.cursor = nodeAt(p) ? 'move' : 'grab';
+    svg.style.cursor = nodeAt(p) ? 'move' : legCursor(p) || 'grab';
     return;
   }
   const p = toModel(ev);
@@ -623,7 +704,27 @@ function onPointerMove(ev) {
     const dx = snap(p.x - drag.start.x);
     const dy = snap(p.y - drag.start.y);
     for (const b of drag.boxes) { b.n.x = snap(b.x + dx); b.n.y = snap(b.y + dy); }
+    for (const r of drag.riders) r.e.points = r.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
     refitGroups();
+    render();
+    return;
+  }
+  if (drag.mode === 'segment') {
+    // Rebuilt from the route as it was at pointerdown on every move, never
+    // accumulated, so a long drag can't drift.
+    const { route, k, axis } = drag;
+    const q = route.raw.map((pt) => ({ ...pt }));
+    const c = snap(p[axis]);
+    q[k][axis] = c;
+    q[k + 1][axis] = c;
+    // Only the bends are stored. The stub ends are re-derived from the blocks
+    // at render, and a moved one stays behind as a bend -- that is the jog.
+    const bends = simplify([route.a0].concat(q.slice(1, -1), [route.b0])).slice(1, -1);
+    drag.edge.points = bends.length ? bends : null;
+    // Pin the ports the path was drawn against, so adding another connector
+    // to the same side can't re-space this one out from under its bends.
+    drag.edge.fromAnchor = drag.edge.fromAnchor || { ...route.from };
+    drag.edge.toAnchor = drag.edge.toAnchor || { ...route.to };
     render();
     return;
   }
@@ -664,6 +765,7 @@ function onPointerUp(ev) {
       from: d.from.id, to: target.id, label: '', style: 'arrow', width: DEFAULT_EDGE_W,
       fromAnchor: { side: d.anchor.side, t: d.anchor.t },
       toAnchor: landed ? { side: landed.side, t: landed.t } : null,
+      points: null,
     });
     if (created) { sel = new Set([target.id]); selEdge = -1; }
     commit();
@@ -846,7 +948,15 @@ function onKeyDown(ev) {
     const step = ev.shiftKey ? 1 : GRID;
     const dx = (ev.key === 'ArrowRight' ? step : 0) - (ev.key === 'ArrowLeft' ? step : 0);
     const dy = (ev.key === 'ArrowDown' ? step : 0) - (ev.key === 'ArrowUp' ? step : 0);
-    if (dx || dy) { eat(); applyToNodes((n) => { n.x += dx; n.y += dy; }); }
+    if (dx || dy) {
+      eat();
+      const moving = riders(new Set(selectedNodes().map((n) => n.id)));
+      applyToNodes((n) => { n.x += dx; n.y += dy; });
+      // applyToNodes took the undo snapshot before moving anything, so
+      // shifting the riders afterwards still lands in that same undo step.
+      for (const r of moving) r.e.points = r.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
+      render(); notify();
+    }
   } else if (ev.key === 'Escape') {
     sel = new Set(); selEdge = -1; armedShape = null;
     render(); notify();

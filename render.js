@@ -240,17 +240,39 @@ function simplify(pts) {
   return out;
 }
 
-function orthRoute(p0, s0, p1, s1) {
-  const a = { x: p0.x + DIRS[s0].x * STUB, y: p0.y + DIRS[s0].y * STUB };
-  const b = { x: p1.x + DIRS[s1].x * STUB, y: p1.y + DIRS[s1].y * STUB };
+function stubOf(p, side) {
+  return { x: p.x + DIRS[side].x * STUB, y: p.y + DIRS[side].y * STUB };
+}
+
+// The bends of an untouched connector, between the two stub ends.
+function autoBends(a, s0, b, s1) {
   const h0 = DIRS[s0].y === 0;
   const h1 = DIRS[s1].y === 0;
-  let mid;
-  if (h0 && h1) { const mx = (a.x + b.x) / 2; mid = [{ x: mx, y: a.y }, { x: mx, y: b.y }]; }
-  else if (!h0 && !h1) { const my = (a.y + b.y) / 2; mid = [{ x: a.x, y: my }, { x: b.x, y: my }]; }
-  else if (h0) mid = [{ x: b.x, y: a.y }];
-  else mid = [{ x: a.x, y: b.y }];
-  return simplify([p0, a].concat(mid, [b, p1]));
+  if (h0 && h1) { const mx = (a.x + b.x) / 2; return [{ x: mx, y: a.y }, { x: mx, y: b.y }]; }
+  if (!h0 && !h1) { const my = (a.y + b.y) / 2; return [{ x: a.x, y: my }, { x: b.x, y: my }]; }
+  return h0 ? [{ x: b.x, y: a.y }] : [{ x: a.x, y: b.y }];
+}
+
+// Joins points with right angles, adding a corner wherever two neighbours
+// differ in both x and y. A hand-edited path only stores its bends, so when a
+// block moves afterwards this is what keeps the connector square: the stub
+// that moved with the block gets a fresh corner to meet the stored bends. The
+// corner turns off the previous leg rather than continuing it, so it never
+// doubles back over itself.
+function joinOrthogonal(pts) {
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const u = out[out.length - 1];
+    const v = pts[i];
+    if (Math.abs(u.x - v.x) > 0.5 && Math.abs(u.y - v.y) > 0.5) {
+      const prev = out[out.length - 2];
+      const cameHorizontal = prev && Math.abs(prev.y - u.y) < 0.5;
+      out.push(cameHorizontal ? { x: u.x, y: v.y } : { x: v.x, y: u.y });
+    }
+    const last = out[out.length - 1];
+    if (Math.hypot(last.x - v.x, last.y - v.y) > 0.5) out.push(v);
+  }
+  return out;
 }
 
 function selfLoopPoints(n) {
@@ -267,9 +289,13 @@ function selfLoopPoints(n) {
 // All edges are routed in one pass rather than one at a time, because several
 // edges leaving the same side of a block have to be spread along it instead of
 // piling onto one midpoint. That spreading is most of what makes a fan-out
-// read as separate signals. Returns one point array per edge (null if an
-// endpoint is missing), indexed to match d.edges.
-function edgeGeometry(d) {
+// read as separate signals.
+//
+// Returns one route per edge, indexed to match d.edges (null if an endpoint is
+// missing). `raw` keeps every point including the two stub ends and collinear
+// runs -- the editor needs those to know which leg you grabbed. `from`/`to`
+// are the resolved ports, and `a0`/`b0` the stub ends a stored path hangs off.
+function edgeRoutes(d) {
   const slots = d.edges.map((e) => {
     const a = nodeById(d, e.from);
     const b = nodeById(d, e.to);
@@ -302,12 +328,27 @@ function edgeGeometry(d) {
     list.forEach((end, i) => { end.t = (i + 1) / (list.length + 1); });
   }
 
-  return slots.map((s) => {
+  return slots.map((s, i) => {
     if (!s) return null;
-    if (s.self) return selfLoopPoints(s.a);
-    return orthRoute(anchorPoint(s.a, s.from.side, s.from.t), s.from.side,
-                     anchorPoint(s.b, s.to.side, s.to.t), s.to.side);
+    if (s.self) return { self: true, raw: selfLoopPoints(s.a) };
+    const p0 = anchorPoint(s.a, s.from.side, s.from.t);
+    const p1 = anchorPoint(s.b, s.to.side, s.to.t);
+    const a0 = stubOf(p0, s.from.side);
+    const b0 = stubOf(p1, s.to.side);
+    const bends = d.edges[i].points && d.edges[i].points.length
+      ? d.edges[i].points : autoBends(a0, s.from.side, b0, s.to.side);
+    return {
+      raw: joinOrthogonal([p0, a0].concat(bends, [b0, p1])),
+      from: { side: s.from.side, t: s.from.t },
+      to: { side: s.to.side, t: s.to.t },
+      a0, b0,
+    };
   });
+}
+
+// What actually gets drawn: the routes with redundant points removed.
+function edgeGeometry(d) {
+  return edgeRoutes(d).map((r) => r && (r.self ? r.raw : simplify(r.raw)));
 }
 
 function roundedPathD(pts, r) {

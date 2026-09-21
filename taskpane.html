@@ -99,7 +99,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v6</span>
+    <span class="build">build v7</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -134,9 +134,9 @@
     <button id="loadBtn">Open selected</button>
   </div>
 
-<script src="diagram.js?v=6"></script>
-<script src="render.js?v=6"></script>
-<script src="editor.js?v=6"></script>
+<script src="diagram.js?v=7"></script>
+<script src="render.js?v=7"></script>
+<script src="editor.js?v=7"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -344,6 +344,8 @@
       add(edgeStyleSelect(info.edge));
       add(edgeWidthSelect(info.edge));
       add(edgeLabelInput(info.edge));
+      if (info.edge.points) add(button('Reset path', resetEdgePath));
+      else add(hint('drag a leg to reroute'));
       add(button('Delete', deleteSelection));
       return;
     }
@@ -366,7 +368,7 @@
       return;
     }
     add(hint('Drag a shape in, or double-click the canvas. Double-click a block to rename it. ' +
-             'Drag a blue dot to connect. Right-click for everything else.'));
+             'Drag a blue dot to connect, drag a connector to reroute it. Right-click for everything else.'));
   }
 
   // groupSelection/ungroupSelection return null on success, a reason on refusal.
@@ -417,6 +419,7 @@
       row('Style').appendChild(edgeStyleSelect(info.edge));
       row('Thickness').appendChild(edgeWidthSelect(info.edge));
       sep();
+      act('Reset path', '', resetEdgePath, !!info.edge.points);
       act('Delete connector', 'Del', deleteSelection);
     } else if (info.nodes.length) {
       act('Edit text', 'F2', () => editSelectedLabel());

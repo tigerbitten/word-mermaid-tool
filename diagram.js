@@ -2,7 +2,7 @@
 //
 // A diagram is a plain object:
 //   { direction, nodes: [{id,label,shape,x,y,w,h,fill,fontSize}],
-//     edges: [{from,to,label,style,width,fromAnchor,toAnchor}],
+//     edges: [{from,to,label,style,width,fromAnchor,toAnchor,points}],
 //     groups: [{id,label,members:[nodeId],x,y,w,h}] }
 //
 // Nodes carry their own geometry because the canvas is the source of truth --
@@ -163,6 +163,11 @@ function toMermaid(d) {
     if (e.fromAnchor || e.toAnchor) {
       lines.push('%% link ' + i + ' ' + anchorText(e.fromAnchor) + ' ' + anchorText(e.toAnchor));
     }
+    // The bends of a connector whose path was dragged by hand. Absent for
+    // every connector left on automatic routing.
+    if (e.points && e.points.length) {
+      lines.push('%% path ' + i + ' ' + e.points.map((p) => Math.round(p.x) + ',' + Math.round(p.y)).join(' '));
+    }
   });
 
   return lines.join('\n');
@@ -266,6 +271,7 @@ function parseMermaid(text) {
   const d = newDiagram();
   const layout = {};
   const anchors = {};
+  const paths = {};
   const widths = {};
   const styles = {};
   let groupStack = [];
@@ -299,6 +305,14 @@ function parseMermaid(text) {
     const linkMatch = line.match(/^%%\s+link\s+(\d+)\s+([nesw][\d.]+|-)\s+([nesw][\d.]+|-)\s*$/);
     if (linkMatch) {
       anchors[+linkMatch[1]] = [readAnchor(linkMatch[2]), readAnchor(linkMatch[3])];
+      continue;
+    }
+    const pathMatch = line.match(/^%%\s+path\s+(\d+)((?:\s+-?\d+,-?\d+)+)\s*$/);
+    if (pathMatch) {
+      paths[+pathMatch[1]] = pathMatch[2].trim().split(/\s+/).map((pair) => {
+        const [x, y] = pair.split(',').map(Number);
+        return { x, y };
+      });
       continue;
     }
     if (line.startsWith('%%')) continue;
@@ -353,7 +367,7 @@ function parseMermaid(text) {
         from: prev.id, to: target.id,
         label: link[2] ? unquoteLabel(link[2]) : '',
         style: kind.style, width: kind.width,
-        fromAnchor: null, toAnchor: null,
+        fromAnchor: null, toAnchor: null, points: null,
       });
       prev = target;
     }
@@ -370,6 +384,7 @@ function parseMermaid(text) {
   d.edges.forEach((e, i) => {
     if (widths[i]) e.width = widths[i];
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
+    if (paths[i]) e.points = paths[i];
   });
 
   // Groups own their members, so a node listed in two is a contradiction;

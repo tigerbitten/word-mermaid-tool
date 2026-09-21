@@ -22,6 +22,10 @@ Prototype. Word desktop on Windows and Mac.
   There are several dots per side — the one you grab is where the connector
   stays anchored. Drop on empty canvas instead and you get a new block, already
   wired up. Several connectors off the same side fan out automatically.
+- To reroute a connector: drag any leg of it sideways. The path stays square,
+  and dragging a leg that touches a block puts a jog in beside it. Moving the
+  blocks afterwards keeps your bends; right-click → *Reset path* goes back to
+  automatic routing.
 - Drag corners to resize. Shift-click, or shift-drag a box, to multi-select;
   group into a labelled boundary; recolor.
 - Drag empty canvas to pan; scroll to zoom.
@@ -65,7 +69,8 @@ The whole payload is valid Mermaid — paste it into mermaid.live and it renders
 The `%%` lines are Mermaid comments, ignored by every renderer; they're how this
 tool remembers where you put each block, since Mermaid itself has no way to
 express node positions. A `%% link` line records which side of a block a
-connector was pinned to, and only appears when you pinned one by hand.
+connector was pinned to, and a `%% path` line records the bends of a connector
+you rerouted by hand; neither appears unless you did that.
 
 Everything else rides in standard Mermaid: fills and text sizes are `style`
 statements, connector thickness is a `linkStyle` statement, and a heavy
