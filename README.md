@@ -181,6 +181,7 @@ real Word.
 | `render.js` | Model → SVG. The canvas and the inserted picture come from this same code |
 | `editor.js` | Pointer interaction: drag, connect, resize, select, undo, pan/zoom |
 | `taskpane.html` | UI shell and every Office.js call |
+| `icon.svg` | The add-in icon; `icon-32.png` / `icon-64.png` are it exported at those sizes for the manifest |
 
 ### Every time you push
 
