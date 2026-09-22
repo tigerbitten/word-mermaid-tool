@@ -76,7 +76,8 @@ this bug, because the build marker updates and everything still looks fine.
 
 The taskpane also shows a `build vN` marker at the top of the page (bump it
 alongside `?v=N`) so a stale load is visually obvious instead of silently
-misleading.
+misleading. The manifest's `<ProviderName>` is the same `build vN` text, so
+the Add-ins dialog says which manifest is installed; bump it too.
 
 If bumping `?v=N` still doesn't work and the build marker won't update no
 matter what, that's a deeper cache (browser HTTP cache or a Word-session

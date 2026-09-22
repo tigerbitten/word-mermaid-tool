@@ -82,6 +82,11 @@ let redoStack = [];
 let clipboard = null;
 let styleClipboard = null;
 let menuPoint = { x: 0, y: 0 };
+let spaceDown = false;    // Space held: any drag pans
+let lastDragMove = null;  // the latest pointermove of a drag, replayed while the view edge-pans
+let panFrame = 0;
+let pressAt = { x: 0, y: 0 }; // screen point of the last press on the canvas
+const EDGE_PAN = 28;      // screen px from the canvas edge where a drag starts scrolling the view
 
 const snap = (v) => Math.round(v / GRID) * GRID;
 
@@ -130,7 +135,10 @@ function initEditor(hostEl, onChange, onViewChange, onContextMenu, extra) {
   // The OS can take the pointer away mid-drag (a notification, alt-tab);
   // treat that like Esc rather than leaving a drag stuck on.
   window.addEventListener('pointercancel', () => { if (drag) cancelDrag(); });
-  window.addEventListener('blur', () => { if (drag) cancelDrag(); });
+  window.addEventListener('blur', () => { spaceDown = false; if (drag) cancelDrag(); });
+  window.addEventListener('keyup', (ev) => {
+    if (ev.key === ' ' && spaceDown) { spaceDown = false; if (!drag) svg.style.cursor = 'default'; }
+  });
   svg.addEventListener('wheel', onWheel, { passive: false });
   svg.addEventListener('dblclick', onDoubleClick);
   svg.addEventListener('contextmenu', onContext);
@@ -163,8 +171,8 @@ function setDragShape(shape) { dragShape = shape; if (!shape && ghost) { ghost =
 
 function render() {
   // Loading, undo and delete all swap the node objects out from under the
-  // hover, which would otherwise leave connection ports floating over a block
-  // that no longer exists.
+  // hover, which would otherwise leave a hover outline over a block that no
+  // longer exists.
   if (hoverNode && !model.nodes.includes(hoverNode)) hoverNode = null;
   const t = `translate(${view.x} ${view.y}) scale(${view.zoom})`;
   world.setAttribute('transform', t);
@@ -949,13 +957,19 @@ function restoreModel(text) {
   notify();
 }
 
+// Undo or redo mid-gesture (the buttons are clickable while a click-click
+// line is half placed) only abandons the gesture. The gesture has its own
+// snapshot on the stack; left running, Esc would pop that snapshot after the
+// stack had moved on and silently undo a real edit.
 function undo() {
+  if (drag) { cancelDrag(); return; }
   if (!undoStack.length) return;
   redoStack.push(JSON.stringify(model));
   restoreModel(undoStack.pop());
 }
 
 function redo() {
+  if (drag) { cancelDrag(); return; }
   if (!redoStack.length) return;
   undoStack.push(JSON.stringify(model));
   restoreModel(redoStack.pop());
@@ -970,11 +984,13 @@ function onPointerDown(ev) {
   // losing focus does that, but if it never had focus (the host can refuse
   // it) no blur ever arrives and the box would sit there for good.
   commitOpenEditor();
+  pressAt = { x: ev.clientX, y: ev.clientY };
   // Capture, so the release still arrives if the pointer leaves the pane
   // mid-drag -- otherwise the drag never ends and the next move drags again.
   try { svg.setPointerCapture(ev.pointerId); } catch (e) { /* synthetic events have no live pointer */ }
-  if (ev.button === 1) {
+  if (ev.button === 1 || (ev.button === 0 && spaceDown)) {
     drag = { mode: 'pan', sx: ev.clientX, sy: ev.clientY, vx: view.x, vy: view.y };
+    svg.style.cursor = 'grabbing';
     ev.preventDefault();
     return;
   }
@@ -1021,6 +1037,8 @@ function onPointerDown(ev) {
     startMove(p);
     drag.onRelease = onRelease;
     drag.hit = n.id;
+    // Alt-drag (Miro) or Ctrl-drag (Word, PowerPoint) drags off a copy.
+    drag.copyOnMove = ev.altKey || ev.ctrlKey;
     render();
     notify();
     return;
@@ -1067,6 +1085,7 @@ function onPointerDown(ev) {
     sel = toggle ? new Set([...sel, g.id]) : new Set([g.id]);
     selEdge = -1;
     startMove(p);
+    drag.copyOnMove = ev.altKey || ev.ctrlKey;
     render();
     notify();
     return;
@@ -1194,7 +1213,12 @@ function cancelDrag() {
   drag = null;
   if (d.mode === 'pan') { view.x = d.vx; view.y = d.vy; onView(); }
   if (d.mode === 'marquee') sel = d.base;
-  if (d.undoPushed) model = JSON.parse(undoStack.pop());
+  if (d.undoPushed) {
+    model = JSON.parse(undoStack.pop());
+    // A copy-drag selected the copies, which no longer exist.
+    sel = new Set([...sel].filter((id) => nodeById(model, id) || model.groups.some((g) => g.id === id)));
+    if (!model.edges[selEdge]) selEdge = -1;
+  }
   svg.style.cursor = 'default';
   render();
   notify();
@@ -1291,6 +1315,30 @@ function moveEnd(ev, p) {
   render();
 }
 
+// Dragging something up to the edge of the canvas scrolls the view, as in
+// Miro, so a block or a line end can be carried past what's on screen -- in a
+// narrow task pane that's most of the diagram. The pointer isn't moving, but
+// the canvas under it is, so its last move is replayed each frame.
+function edgePan() {
+  panFrame = 0;
+  const ev = lastDragMove;
+  if (!drag || !ev || drag.mode === 'pan' || drag.twoClick) return;
+  // Only once it's really a drag: a click on a block that happens to sit at
+  // the edge, with a pixel of jitter, mustn't send the view sliding.
+  if (Math.hypot(ev.clientX - pressAt.x, ev.clientY - pressAt.y) < 8) return;
+  const r = svg.getBoundingClientRect();
+  const speed = (v, lo, hi) => v < lo + EDGE_PAN ? Math.min(14, (lo + EDGE_PAN - v) / 2)
+    : v > hi - EDGE_PAN ? -Math.min(14, (v - hi + EDGE_PAN) / 2) : 0;
+  const dx = speed(ev.clientX, r.left, r.right);
+  const dy = speed(ev.clientY, r.top, r.bottom);
+  if (!dx && !dy) return;
+  view.x += dx;
+  view.y += dy;
+  viewTouched = true;
+  onPointerMove(ev);            // schedules the next frame
+  onView();
+}
+
 // Undo is snapshotted on the first movement rather than on pointerdown, so a
 // click that never turns into a drag doesn't fill the stack with no-ops.
 function ensureUndo() {
@@ -1326,11 +1374,27 @@ function onPointerMove(ev) {
     connectSpot = spot;
     if (armedShape) ghost = lineTool ? null : { shape: armedShape, p };
     if (hoverChanged || spotChanged || armedShape) render();
-    svg.style.cursor = armedShape || spot ? 'crosshair'
+    svg.style.cursor = spaceDown ? 'grab' : armedShape || spot ? 'crosshair'
       : nodeAt(p) ? 'move' : legCursor(p) || (groupAt(p) ? 'move' : 'grab');
     return;
   }
   const p = toModel(ev);
+  if (drag.mode !== 'pan' && !drag.twoClick) {
+    lastDragMove = ev;
+    if (!panFrame) panFrame = requestAnimationFrame(edgePan);
+  }
+  if (drag.mode === 'move' && drag.copyOnMove && !drag.undoPushed) {
+    if (Math.hypot(p.x - drag.start.x, p.y - drag.start.y) * view.zoom < 3) return;
+    // The copies are made in place and it's them that get dragged, leaving
+    // the originals behind. The internal clipboard is left as it was.
+    const start = drag.start;
+    const saved = clipboard;
+    copySelection();
+    pasteClipboard(0, 0);
+    clipboard = saved;
+    startMove(start);
+    drag.undoPushed = true;      // the paste took the snapshot; the move is part of the same step
+  }
 
   if (drag.mode === 'pan') {
     view.x = drag.vx + (ev.clientX - drag.sx);
@@ -1455,8 +1519,8 @@ function onPointerUp(ev) {
   if (d.mode === 'pan') {
     // Hover is re-read where the pointer came to rest, rather than left over
     // from wherever it was when the pan began.
-    hoverNode = nodeAt(toModel(ev), 18 / view.zoom);
-    svg.style.cursor = 'default';
+    hoverNode = nodeAt(toModel(ev), CONNECT_BAND / view.zoom);
+    svg.style.cursor = spaceDown ? 'grab' : 'default';
     render();
     return;
   }
@@ -1576,6 +1640,10 @@ function onContext(ev) {
   ev.preventDefault();
   if (pendingConnect) return;
   if (drag && drag.twoClick) { cancelDrag(); return; }   // right-click abandons a half-placed line
+  // Mid-drag, re-selecting under the pointer would pull things out from under
+  // it. A press that hasn't moved yet is dropped instead: on a Mac, Ctrl-click
+  // is right-click, and arrives as a press followed by this.
+  if (drag) { if (drag.undoPushed) return; drag = null; }
   const p = toModel(ev);
   menuPoint = p;
   armedShape = null;
@@ -1717,7 +1785,12 @@ function onKeyDown(ev) {
   if (!host.offsetParent) return;
   if (pendingConnect) return;     // the shape picker handles its own keys
   const eat = () => { ev.preventDefault(); ev.stopPropagation(); };
-  if (drag && ev.key === 'Escape') { eat(); cancelDrag(); return; }
+  // Mid-gesture only Esc means anything: Delete or Ctrl+Z halfway through a
+  // drag would pull the objects out from under it.
+  if (drag) { if (ev.key === 'Escape') { eat(); cancelDrag(); } return; }
+  // Hold Space and drag to pan from anywhere, even starting on a block, as in
+  // Miro and every design tool.
+  if (ev.key === ' ') { eat(); if (!spaceDown) { spaceDown = true; svg.style.cursor = 'grab'; } return; }
   const ctrl = ev.ctrlKey || ev.metaKey;
   const k = ev.key.toLowerCase();
 
@@ -1750,11 +1823,25 @@ function onKeyDown(ev) {
   } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
     eat();
     deleteSelection();
-  } else if (ev.key.startsWith('Arrow') && sel.size) {
+  } else if (ev.key === 'PageUp' || ev.key === 'PageDown') {
+    // Miro's keys for bring to front / send to back.
+    eat();
+    reorderSelection(ev.key === 'PageUp');
+  } else if (ev.key.startsWith('Arrow') && (sel.size || selEdge >= 0)) {
     const step = ev.shiftKey ? 1 : GRID;
     const dx = (ev.key === 'ArrowRight' ? step : 0) - (ev.key === 'ArrowLeft' ? step : 0);
     const dy = (ev.key === 'ArrowDown' ? step : 0) - (ev.key === 'ArrowUp' ? step : 0);
-    if (dx || dy) {
+    const e = model.edges[selEdge];
+    if (e && (dx || dy)) {
+      // A loose line nudges whole. One attached to a block goes where its
+      // block goes, so there's nothing to nudge.
+      eat();
+      if (!freeLine(e)) return;
+      pushUndo();
+      for (const id of [e.from, e.to]) { const n = nodeById(model, id); n.x += dx; n.y += dy; }
+      if (e.points) e.points = e.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
+      commit();
+    } else if (dx || dy) {
       eat();
       const moving = riders(new Set(selectedNodes().map((n) => n.id)));
       applyToNodes((n) => { n.x += dx; n.y += dy; });
@@ -1774,6 +1861,7 @@ function onKeyDown(ev) {
 // `noUndo` for the diagram the pane starts with: Ctrl+Z straight after opening
 // the add-in must not empty the canvas.
 function setModel(d, noUndo) {
+  if (drag) cancelDrag();
   if (!noUndo) pushUndo();
   model = d;
   sel = new Set();

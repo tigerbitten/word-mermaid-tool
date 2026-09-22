@@ -51,7 +51,9 @@ Prototype. Word desktop on Windows and Mac.
   centres — with a pink guide showing what it lined up with.
 - Drag a corner or side handle to resize; hold Shift on a corner to keep the
   proportions. Shift- or Ctrl-click, or shift-drag a box, to multi-select.
-  Hold Shift while dragging to move in a straight line. Esc mid-drag cancels.
+  Hold Shift while dragging to move in a straight line. Alt- or Ctrl-drag
+  drags off a copy. Drag anything to the edge of the canvas and the view
+  scrolls with it. Esc mid-drag cancels.
 - With several blocks selected, **Align…** in the toolbar lines them up,
   spaces them evenly, or makes them all the size of the first one selected.
 - Groups work like Miro frames: drag a group by its body, drag a block out to
@@ -59,7 +61,8 @@ Prototype. Word desktop on Windows and Mac.
   Selecting a block outlines its group and tints the other members; the
   toolbar and right-click menu name the group and offer *Add to…* / *Remove*.
   Select a group to change its title size.
-- Drag empty canvas or scroll to pan; Ctrl+scroll or pinch to zoom.
+- Drag empty canvas, hold Space and drag anywhere, or scroll to pan;
+  Ctrl+scroll or pinch to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
   in (from an LLM, say). Your edits apply when you go back to the canvas.
 - **Insert into document** drops the picture in. **Open selected** picks a
@@ -80,6 +83,8 @@ Prototype. Word desktop on Windows and Mac.
 | `Shift+1` / `Shift+0` | fit everything / 100% |
 | `Ctrl +` / `Ctrl -` | zoom |
 | arrows (`Shift` for 1px) | nudge |
+| `PgUp` / `PgDn` | bring to front / send to back |
+| `Space` + drag | pan |
 | `Delete` | delete |
 
 ## Why the source lives in alt-text
@@ -186,7 +191,7 @@ real Word.
 ### Every time you push
 
 Bump `?v=N` on `SourceLocation` in `manifest.xml` **and** the `build vN` marker
-in `taskpane.html`, together, and bump the `?v=N` on the three `<script src>`
-tags. Word caches the taskpane hard enough that without a new URL it will serve
+in `taskpane.html` (and the manifest's `ProviderName`, which shows the same
+text), together, and bump the `?v=N` on the three `<script src>` tags. Word caches the taskpane hard enough that without a new URL it will serve
 a stale copy after a fresh deploy and your changes just won't appear. See
 `CLAUDE.md`.

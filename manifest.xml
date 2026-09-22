@@ -5,7 +5,7 @@
     xsi:type="TaskPaneApp">
   <Id>13ccc42c-e6dc-4d30-aa55-d1dd2850fc01</Id>
   <Version>1.1.0.0</Version>
-  <ProviderName>William Stroud</ProviderName>
+  <ProviderName>build v18</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Mermaid Block Diagrams" />
   <Description DefaultValue="Draw block diagrams directly in Word. Each diagram is saved as standard Mermaid text in the picture's alt text, so it can be re-edited at any time and read by AI tools." />
@@ -16,7 +16,7 @@
     <Host Name="Document" />
   </Hosts>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://tigerbitten.github.io/word-mermaid-tool/taskpane.html?v=17" />
+    <SourceLocation DefaultValue="https://tigerbitten.github.io/word-mermaid-tool/taskpane.html?v=18" />
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
 </OfficeApp>
