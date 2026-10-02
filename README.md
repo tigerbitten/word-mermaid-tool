@@ -37,9 +37,11 @@ Prototype. Word desktop on Windows and Mac.
   drag. No dots appear on blocks. Drop on empty canvas and a shape picker asks
   what to create there (cancel and the line stays, loose).
 - Right-angled connectors are routed to stay clean: they leave and arrive
-  square to the edge, never cut through either block, and come out as one
-  straight line whenever the two ends line up. Drop an end nearly level with
-  the other and it snaps level.
+  square to the edge and end on the shape itself (a mux's slanted side, a
+  cylinder's curve), go round other blocks rather than through them, keep off
+  each other and off group borders, and come out as one straight line whenever
+  the two ends line up. A decision's branches leave from its side corners.
+  Drop an end nearly level with the other and it snaps level.
 - **Hold Shift while dragging a line** — an end, a new connector, or the line
   itself — to make it straight; a loose end also snaps to 45° steps.
   **Straight** in the toolbar does the same and switches back to right angles
@@ -68,7 +70,12 @@ Prototype. Word desktop on Windows and Mac.
 - Drag empty canvas, hold Space and drag anywhere, or scroll to pan;
   Ctrl+scroll or pinch to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
-  in (from an LLM, say). Your edits apply when you go back to the canvas.
+  in — even a whole LLM reply; its first ```` ```mermaid ```` block is used. Your
+  edits apply when you go back to the canvas. Pasted diagrams are laid out
+  for you: blocks sized to their text, groups kept together, and loops cut at
+  their "go back" arrow so the flow reads top to bottom (or left to right).
+  Only flowcharts and block diagrams can be drawn; another kind is named and
+  refused.
 - **Insert** drops the picture in. **Open** picks a
   diagram back up out of the document. **Update** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
@@ -127,14 +134,19 @@ in Mermaid, so the loose end is written as an empty text node
 So that a plain Mermaid renderer — and an LLM — sees the diagram the way you
 drew it, the header's direction is read off the drawing (`TD` for a diagram
 that flows downward, `LR` across, `BT`/`RL` for upward or leftward flows),
-blocks and groups are declared in reading order (top-left to bottom-right),
-and connectors are listed grouped by the block they leave. mermaid.live still
-does its own layout, but it keeps the drawing's broad shape.
+blocks and groups are declared in the order the flow runs (stage by stage
+along the header's direction), and connectors are listed grouped by the block
+they leave. mermaid.live still does its own layout, but it keeps the drawing's
+broad shape. Labels are written as typed (`"Attempts >= 3?"`, `"C# client"`):
+only a quote, a `<` that would open an HTML tag and a `#` that would start an
+entity are escaped. Hardware symbols Mermaid has no word for get one in a
+comment under the header (`%% J1 is a wire junction; ADD is a summing
+junction`), so an LLM knows what it's looking at.
 
 Everything else rides in standard Mermaid: fills and text sizes are `style`
 statements, connector thickness is a `linkStyle` statement, and a heavy
 connector is also written with Mermaid's own `==>` form so it stays heavy in
-other renderers.
+other renderers. A diagram pasted in with a front-matter `title:` keeps it.
 
 ### Pointing an LLM at the diagrams
 
