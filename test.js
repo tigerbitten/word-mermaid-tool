@@ -105,6 +105,12 @@ d = parseMermaid('flowchart LR\n  A --o B\n  A x--x C\n  A ---> D\n  A -..-> E')
 out = toMermaid(d);
 check('circle/cross ends and long links written back', /A --o B/.test(out) && /A x--x C/.test(out) && /A ---> D/.test(out) && /A -\.\.-> E/.test(out), out);
 
+d = parseMermaid('flowchart LR\n  U@{ icon: "fa:user", form: "circle", label: "User" } --> I@{ img: "https://x.y/a.png", label: "Logo" }\n  I --> M[fa:fa-car Car]');
+out = toMermaid(d);
+check('icon and image nodes kept', d.nodes[0].shape === 'icon' && d.nodes[0].icon === 'fa:user' && d.nodes[1].img === 'https://x.y/a.png' &&
+  /U@\{ icon: "fa:user", form: "circle", label: "User" \}/.test(out) && /I@\{ img: "https:\/\/x.y\/a.png", label: "Logo" \}/.test(out) &&
+  /M\["fa:fa-car Car"\]/.test(out), out);
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&

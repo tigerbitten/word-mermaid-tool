@@ -820,7 +820,7 @@
     setModel(d);
     onModelChanged();
     fitView();
-    setStatus('canvas updated from Mermaid', 'success');
+    setStatus(d.from ? 'read the ' + d.from + ' as a flowchart -- the Mermaid tab now shows that form' : 'canvas updated from Mermaid', 'success');
     return true;
   }
 

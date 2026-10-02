@@ -95,6 +95,7 @@ function labelArea(n) {
   const bar = Math.min(16, h / 4);
   switch (n.shape) {
     case 'cloud': return { x: x + w * 0.12, y: y + h * 0.28, w: w * 0.76, h: h * 0.56 };
+    case 'icon': case 'image': { const top = mediaBox(n).h + 6; return { x: x - 20, y: y + top, w: w + 40, h: Math.max(lineH(n.fontSize) + 4, h - top) }; }
     case 'person': { const r = personHead(n); return { x, y: y + 2 * r + 4, w, h: h - 2 * r - 4 }; }
     case 'browser': case 'console': case 'divided': return { x, y: y + bar, w, h: h - bar };
     case 'storage': return { x: x + 10, y: y + 10, w: w - 10, h: h - 10 };
@@ -119,7 +120,7 @@ function labelArea(n) {
 // Grows a node to fit its label. Never shrinks below what the user dragged it
 // to -- resizing is theirs to control, this only prevents clipped text.
 function fitNodeSize(n) {
-  if (LABELLESS.has(n.shape)) return;
+  if (LABELLESS.has(n.shape) || n.shape === 'icon' || n.shape === 'image') return;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
   // A few rounds: for a diamond the outline's share of the box grows with the
   // box, so one round of growing still leaves it short.
@@ -128,7 +129,7 @@ function fitNodeSize(n) {
     // Extra room the shape's own outline takes out of the box, added back on.
     const slackW = n.w - area.w;
     const slackH = n.h - area.h;
-    const lines = wrapLabel(n.label, Math.max(60, area.w - LABEL_PAD_X * 2), size, n.bold);
+    const lines = wrapLabel(shownLabel(n), Math.max(60, area.w - LABEL_PAD_X * 2), size, n.bold);
     const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size, n.bold)), 0)) + LABEL_PAD_X * 2 + slackW;
     const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2 + slackH;
     if (n.w >= needW && n.h >= needH) break;
@@ -145,10 +146,71 @@ function sizeForLabel(n) {
   if (LABELLESS.has(n.shape) || !n.label) return;
   // A blank diamond or circle is a marker (a state diagram's choice): small.
   if (!n.label.trim() && /diamond|circle/.test(n.shape)) { n.w = 40; n.h = 40; return; }
-  const one = textWidth(n.label, n.fontSize || DEFAULT_FONT_SIZE, n.bold);
+  if (n.shape === 'icon' || n.shape === 'image') return;
+  const one = textWidth(shownLabel(n), n.fontSize || DEFAULT_FONT_SIZE, n.bold);
   const textW = Math.min(240, one / 3 + LABEL_PAD_X * 2 + 20);
   n.w = Math.max(n.w, Math.ceil(textW * n.w / labelArea(n).w / 10) * 10);
   fitNodeSize(n);
+}
+
+// Line glyphs on a 24-unit grid for the icons LLMs name most, picked by
+// keyword from any icon pack's name (`fa:user`, `mdi:account`, `logos:aws`...).
+// Mermaid itself needs the pack registered to draw them; the picture can't
+// wait for that, so it draws its own.
+const GLYPHS = [
+  [/user|person|account|people|customer|admin|actor/, 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'],
+  [/server|host|rack|vm\b|instance|compute/, 'M4 3h16v7H4zM4 14h16v7H4zM7.5 6.5h.01M7.5 17.5h.01'],
+  [/database|\bdb\b|sql|postgres|mongo|storage|table/, 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
+  [/cloud|aws|azure|gcp/, 'M7 19a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 9.5a4.7 4.7 0 0 1 0 9.5z'],
+  [/lock|secur|auth|password/, 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4M12 15v2'],
+  [/key|token|secret/, 'M8 15a4 4 0 1 1 3.4-6.1L21 9v3h-3v3h-3l-1.6-1.6A4 4 0 0 1 8 15z'],
+  [/globe|web|internet|world|earth|dns|cdn/, 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18'],
+  [/gear|cog|setting|config/, 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8'],
+  [/mobile|phone|android|iphone|ios/, 'M7 2h10v20H7zM11 18h2'],
+  [/laptop/, 'M5 5h14v10H5zM2 19h20'],
+  [/desktop|monitor|computer|screen|display|browser|chrome|firefox/, 'M3 4h18v12H3zM8 21h8M12 16v5'],
+  [/envelope|mail|email|inbox|smtp/, 'M3 5h18v14H3zM3 5l9 8 9-8'],
+  [/folder|directory/, 'M3 6h6l2 2h10v11H3z'],
+  [/file|doc|pdf|page|report/, 'M6 2h8l4 4v16H6zM14 2v4h4M9 13h6M9 17h6'],
+  [/shield|firewall|guard|protect|waf/, 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z'],
+  [/bell|notif|alert|alarm/, 'M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4'],
+  [/chart|analytic|metric|graph|stat|dashboard|monitor/, 'M4 20V11M10 20V5M16 20v-7M2 20h20'],
+  [/cart|shop|store|basket|order/, 'M3 4h3l2.5 11h10l2-7H7.2M10 20h.01M17 20h.01'],
+  [/credit|card|payment|pay|bill|money|wallet|dollar/, 'M2 6h20v12H2zM2 10h20M6 15h4'],
+  [/search|find|magnif|query/, 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l5 5'],
+  [/clock|time|schedul|cron|timer/, 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 3'],
+  [/code|terminal|console|cli|bash|shell|git/, 'M8 7l-5 5 5 5M16 7l5 5-5 5'],
+  [/bolt|lambda|function|serverless|flash|event|trigger/, 'M13 2L4 14h7l-1 8 9-12h-7z'],
+  [/network|sitemap|router|switch|load|balanc|gateway|proxy/, 'M10 3h4v4h-4zM3 17h4v4H3zM17 17h4v4h-4zM12 7v5M5 17v-5h14v5'],
+  [/plug|api|connect|integrat|webhook/, 'M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5'],
+  [/robot|\bai\b|brain|ml\b|model|llm|bot|openai|anthropic/, 'M5 8h14v11H5zM12 4v4M9 13h.01M15 13h.01M9 16h6'],
+  [/home|house/, 'M3 11l9-8 9 8M5 9v12h14V9'],
+  [/warn|error|danger|exclam|bug/, 'M12 3L2 21h20zM12 10v5M12 18h.01'],
+  [/check|success|done|ok\b|tick/, 'M4 12l5 5L20 6'],
+  [/message|chat|comment|slack|sms/, 'M4 4h16v12H8l-4 4z'],
+  [/queue|list|log|stream|kafka|topic/, 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+  [/box|package|container|docker|kube|k8s|pod|cube/, 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10'],
+];
+const IMAGE_GLYPH = 'M3 4h18v16H3zM3 16l5-5 4 4 3-3 6 6M15.5 8a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z';
+
+function glyphFor(name) {
+  const key = String(name || '').toLowerCase().replace(/^[\w-]+:/, '').replace(/^fa-/, '');
+  const hit = GLYPHS.find(([re]) => re.test(key));
+  // Unknown: a plain rounded square, rather than a wrong picture.
+  return hit ? hit[1] : 'M5 5h14v14H5z';
+}
+
+// `"fa:fa-car Car"`: Mermaid's old inline-icon syntax. The code is shown as
+// nothing (its icon font isn't there), the text as text.
+function shownLabel(n) {
+  return String(n.label || '').replace(/\bfa[a-z]?:fa-[\w-]+\s*/g, '').trim();
+}
+
+// The icon or picture's own square at the top of an icon / image node; the
+// label goes under it, as Mermaid draws them.
+function mediaBox(n) {
+  const side = Math.max(16, Math.min(n.w, n.h - (n.label ? lineH(n.fontSize) + 6 : 0)));
+  return { x: n.x + (n.w - side) / 2, y: n.y, w: side, h: side };
 }
 
 function personHead(n) { return Math.min(n.h * 0.17, n.w * 0.25, 14); }
@@ -312,6 +374,23 @@ function shapeElement(n) {
       return [el('rect', { x, y, width: w, height: h, rx: Math.min(2, w / 2), class: 'wm-shape wm-solid' })];
     case 'cloud':
       return [el('path', { d: cloudPath(n), class: 'wm-shape' })];
+    case 'icon':
+    case 'image': {
+      const b = mediaBox(n);
+      const parts = [];
+      // Mermaid's `form`: a square, rounded square or circle behind the icon.
+      if (n.shape === 'image' || n.form === 'square') parts.push(el('rect', { x: b.x, y: b.y, width: b.w, height: b.h, class: 'wm-shape' }));
+      else if (n.form === 'rounded') parts.push(el('rect', { x: b.x, y: b.y, width: b.w, height: b.h, rx: b.w * 0.18, class: 'wm-shape' }));
+      else if (n.form === 'circle') parts.push(el('ellipse', { cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2, ry: b.h / 2, class: 'wm-shape' }));
+      const k = (b.w * (n.form || n.shape === 'image' ? 0.6 : 0.95)) / 24;
+      const glyph = el('path', { d: n.shape === 'image' ? IMAGE_GLYPH : glyphFor(n.icon), class: 'wm-shape', 'data-line': '1',
+        transform: `translate(${b.x + b.w / 2 - 12 * k} ${b.y + b.h / 2 - 12 * k}) scale(${k})` });
+      glyph.style.strokeWidth = 1.6 / k;
+      glyph.setAttribute('stroke-linecap', 'round');
+      glyph.setAttribute('stroke-linejoin', 'round');
+      parts.push(glyph);
+      return parts;
+    }
     // Punched tape: waved top and bottom.
     case 'paper_tape': {
       const a = Math.min(8, h * 0.15);
@@ -469,7 +548,7 @@ function drawNode(parent, n) {
   if (LABELLESS.has(n.shape)) return g;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
   const area = labelArea(n);
-  const lines = wrapLabel(n.label, area.w - LABEL_PAD_X * 2, size, n.bold);
+  const lines = wrapLabel(shownLabel(n), area.w - LABEL_PAD_X * 2, size, n.bold);
   const text = labelText(g, lines, area.x + area.w / 2, area.y + area.h / 2, size, n.bold, 'wm-label', DEFAULT_FONT_SIZE);
   if (n.color) text.style.fill = n.color;
   return g;
@@ -561,6 +640,10 @@ function outlineOf(n) {
       return arc(cx, y + ry, w / 2, ry, P, 2 * P).concat(arc(cx, y + h - ry, w / 2, ry, 0, P));
     }
     case 'cloud': return cloudPoints(n);
+    case 'icon': case 'image': {
+      const b = mediaBox(n);
+      return [{ x: b.x, y: b.y }, { x: b.x + b.w, y: b.y }, { x: b.x + b.w, y: n.y + n.h }, { x: b.x, y: n.y + n.h }];
+    }
     case 'stop': return arc(cx, cy, w / 2, h / 2, 0, 2 * P, 48);
     case 'person': {
       const r = personHead(n);

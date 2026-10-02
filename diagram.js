@@ -71,6 +71,10 @@ const SHAPES = {
   brace_r:           { v11: 'brace-r' },
   braces:            { v11: 'braces' },
   bolt:              { v11: 'bolt' },
+  // Mermaid's icon and image nodes (`@{ icon: "fa:user" }`, `@{ img: url }`),
+  // written by nodeDecl from their own fields.
+  icon:              {},
+  image:             {},
   paper_tape:        { v11: 'flag' },
   // The loose end of a free-standing line. Mermaid has no line without a node
   // at each end, so a loose end is an invisible, zero-size, label-less node --
@@ -150,7 +154,7 @@ for (const shape in V11_NAMES) for (const name of V11_NAMES[shape]) SHAPE_BY_V11
 // Wiring symbols carry no text: a junction dot, a summing node, a bus bar.
 // They get their own natural size instead of a text box's.
 const LABELLESS = new Set(['junction', 'start', 'sum', 'bar', 'point', 'stop', 'bolt']);
-const SHAPE_SIZE = { junction: [14, 14], start: [20, 20], sum: [40, 40], bar: [10, 80], point: [0, 0], stop: [28, 28], bolt: [30, 50],
+const SHAPE_SIZE = { icon: [90, 90], image: [110, 100], junction: [14, 14], start: [20, 20], sum: [40, 40], bar: [10, 80], point: [0, 0], stop: [28, 28], bolt: [30, 50],
   person: [100, 90], cloud: [150, 90], collate: [60, 70], manual_file: [130, 70] };
 
 const isPoint = (n) => !!n && n.shape === 'point';
@@ -316,6 +320,8 @@ function nodeDecl(n) {
   // A single space, not "": Mermaid shows a node's id in place of an empty
   // label, so "" would print "point" wherever the diagram is rendered.
   if (isPoint(n)) return n.id + '@{ shape: text, label: " " }';
+  if (n.shape === 'icon') return n.id + '@{ icon: ' + JSON.stringify(n.icon || '') + (n.form ? ', form: ' + JSON.stringify(n.form) : '') + ', label: ' + quoteLabel(n.label) + ' }';
+  if (n.shape === 'image') return n.id + '@{ img: ' + JSON.stringify(n.img || '') + ', label: ' + quoteLabel(n.label) + ' }';
   if (s.v11) {
     return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) && !n.label ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
   }
@@ -694,8 +700,11 @@ function readNodeRef(s, i) {
     while (j < s.length && s[j] !== '}') j = s[j] === '"' ? skipQuoted(s, j) : j + 1;
     const props = readProps(s.slice(i + 2, j));
     const end = readClass(s, Math.min(j + 1, s.length));
-    return { id, shape: props.shape ? SHAPE_BY_V11[props.shape] || 'rect' : null,
-             label: props.label != null ? unquoteLabel(props.label) : null, next: end.next, cls: end.cls };
+    // An icon or an image node: Mermaid's own kinds, kept with their source.
+    const media = props.icon ? { shape: 'icon', icon: unquoteLabel(props.icon), form: props.form ? unquoteLabel(props.form) : null }
+      : props.img ? { shape: 'image', img: unquoteLabel(props.img) } : null;
+    return Object.assign({ id, shape: props.shape ? SHAPE_BY_V11[props.shape] || 'rect' : null,
+             label: props.label != null ? unquoteLabel(props.label) : null, next: end.next, cls: end.cls }, media);
   }
 
   for (const [open, close, shape] of BRACKETS) {
@@ -1058,13 +1067,17 @@ function parseMermaid(text) {
     if (!n) {
       const shape = ref.shape || 'rect';
       const [w, h] = defaultSize(shape);
-      n = { id: ref.id, label: ref.label != null ? ref.label : (LABELLESS.has(shape) ? '' : ref.id),
+      n = { id: ref.id, label: ref.label != null ? ref.label : (LABELLESS.has(shape) || ref.icon || ref.img ? '' : ref.id),
             shape, x: 0, y: 0, w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: !!ref.bold };
+      if (ref.icon) { n.icon = ref.icon; if (ref.form) n.form = ref.form; }
+      if (ref.img) n.img = ref.img;
       d.nodes.push(n);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
       if (ref.label != null) n.label = ref.label;
       if (ref.shape) n.shape = ref.shape;
+      if (ref.icon) { n.icon = ref.icon; n.form = ref.form || null; }
+      if (ref.img) n.img = ref.img;
       if (ref.bold) n.bold = true;
       // Mentioned inside a subgraph, a block seen before outside any joins
       // it, as in Mermaid (`subgraph S` / `B` / `end` is how one is moved
