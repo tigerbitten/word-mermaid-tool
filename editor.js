@@ -395,11 +395,15 @@ function nodeAt(p, margin) {
 // Anywhere inside a group's box grabs the group, like a Miro frame. Blocks and
 // connectors are hit-tested first, so the ones inside stay individually
 // selectable.
+// The innermost group under the point: a subgroup sits inside, and is drawn
+// over, the group around it, so that's the one a click means.
 function groupAt(p) {
+  let best = null;
   for (const g of model.groups) {
-    if (g.w && p.x >= g.x && p.x <= g.x + g.w && p.y >= g.y && p.y <= g.y + g.h) return g;
+    if (g.w && p.x >= g.x && p.x <= g.x + g.w && p.y >= g.y && p.y <= g.y + g.h &&
+        (!best || groupDepth(model, g) > groupDepth(model, best))) best = g;
   }
-  return null;
+  return best;
 }
 
 function groupBoxes() {
