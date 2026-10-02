@@ -38,6 +38,13 @@ check('markdown labels', d.nodes[0].label === 'Bold' && d.nodes[0].bold && d.nod
 d = parseMermaid('flowchart LR\n  A:::hot --> B\n  classDef hot fill:#f96\n  click A "https://x.y"\n  linkStyle default stroke:red');
 check('classDef, click and linkStyle default ignored', edges(d) === 'A>B' && ids(d) === 'A,B', [ids(d), edges(d)]);
 
+d = parseMermaid('flowchart LR\n  A --o B\n  A --x C\n  A o--o D\n  A e1@--> E\n  e1@{ animate: true }');
+check('circle, cross and named links keep both ends', edges(d) === 'A>B A>C A>D A>E' && ids(d) === 'A,B,C,D,E', [ids(d), edges(d)]);
+d = parseMermaid('flowchart LR\n  A:::hot --> B --> C\n  class B cool\n  classDef hot fill:#f96\n  classDef cool fill:#9cf\n  style C fill:#9f9');
+check('classDef colours reach their blocks', d.nodes.map((n) => n.fill).join() === '#f96,#9cf,#9f9', d.nodes.map((n) => n.fill));
+d = parseMermaid('flowchart TD\n  A --> B\n  A --> C\n  A --> D\n  A --> E');
+check('a wide fan-out stays top-down', /^flowchart TD/.test(toMermaid(d)), toMermaid(d).split('\n')[0]);
+
 d = parseMermaid('Here is your diagram:\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nIt shows A feeding B.');
 check('a whole LLM reply gives its fenced diagram', edges(d) === 'A>B', edges(d));
 let refused = '';

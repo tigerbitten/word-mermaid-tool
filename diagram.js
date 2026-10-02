@@ -278,8 +278,13 @@ function flowDirection(d) {
     // Only a one-way arrow says which way things flow; the rest count for the
     // axis alone.
     const sign = e.head === 'end' ? 1 : 0;
-    if (Math.abs(dx) >= Math.abs(dy)) { across++; sx += Math.sign(dx) * sign; }
-    else { down++; sy += Math.sign(dy) * sign; }
+    // A link between blocks that share a column or a row says the axis; a
+    // diagonal one (a fan-out to a wide row) only half as surely.
+    const sameColumn = a.x < b.x + b.w && b.x < a.x + a.w;
+    const sameRow = a.y < b.y + b.h && b.y < a.y + a.h;
+    const weight = sameColumn || sameRow ? 1 : 0.5;
+    if (sameRow || (!sameColumn && Math.abs(dx) >= Math.abs(dy))) { across += weight; sx += Math.sign(dx) * sign; }
+    else { down += weight; sy += Math.sign(dy) * sign; }
   }
   if (!across && !down) return d.direction;
   if (down > across) return sy < 0 ? 'BT' : 'TD';
@@ -440,12 +445,15 @@ const BRACKETS = [
 // its own (`-->|"a|b"|`), so the quoted form is matched first.
 // `~~~` is Mermaid's invisible link, there only to line blocks up: its
 // blocks are kept, and it draws nothing.
-const LINK_RE = /^\s*(~{3,}|<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/;
+// A link is a dash, dot or equals run with an optional head at either end
+// (`<`/`>` arrow, `o` circle, `x` cross), maybe named first (`e1@-->`).
+const LINK_RE = /^\s*(?:[A-Za-z0-9_]+@)?(~{3,}|[<ox]?(?:-\.+-|-{2,}|={2,})[>ox]?)\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/;
 
 function linkFromToken(token) {
   return {
     dash: token.includes('.') ? 'dotted' : 'solid',
-    head: token.startsWith('<') ? 'both' : /[>ox]$/.test(token) ? 'end' : 'none',
+    // Circle and cross heads are drawn as arrows: the direction is what matters.
+    head: /^[<ox]/.test(token) && /[>ox]$/.test(token) ? 'both' : /^[<ox]|[>ox]$/.test(token) ? 'end' : 'none',
     width: token.includes('=') ? 3.5 : DEFAULT_EDGE_W,
   };
 }
@@ -494,8 +502,9 @@ function readNodeRef(s, i) {
     let j = i + 2;
     while (j < s.length && s[j] !== '}') j = s[j] === '"' ? skipQuoted(s, j) : j + 1;
     const props = readProps(s.slice(i + 2, j));
-    return { id, shape: SHAPE_BY_V11[props.shape] || 'rect',
-             label: props.label != null ? unquoteLabel(props.label) : null, next: Math.min(j + 1, s.length) };
+    const end = readClass(s, Math.min(j + 1, s.length));
+    return { id, shape: props.shape ? SHAPE_BY_V11[props.shape] || 'rect' : null,
+             label: props.label != null ? unquoteLabel(props.label) : null, next: end.next, cls: end.cls };
   }
 
   for (const [open, close, shape] of BRACKETS) {
@@ -506,9 +515,9 @@ function readNodeRef(s, i) {
     const end = s.indexOf(close, from);
     if (end === -1) continue;
     const md = markdownLabel(unquoteLabel(s.slice(i + open.length, end)));
-    return { id, shape, label: md.label, bold: md.bold, next: skipClass(s, end + close.length) };
+    return Object.assign({ id, shape, label: md.label, bold: md.bold }, readClass(s, end + close.length));
   }
-  return { id, shape: null, label: null, next: skipClass(s, i) };
+  return Object.assign({ id, shape: null, label: null }, readClass(s, i));
 }
 
 // Mermaid's markdown string, "`**bold** text`": the backticks and the bold
@@ -521,11 +530,10 @@ function markdownLabel(label) {
   return { label: m[1].replace(/\*\*/g, '').trim(), bold };
 }
 
-// `A:::hot` attaches a CSS class. We have no use for the class, but it must be
-// stepped over, or `A:::hot --> B` loses its edge.
-function skipClass(s, i) {
-  const m = s.slice(i).match(/^:::[A-Za-z0-9_-]+/);
-  return m ? i + m[0].length : i;
+// `A:::hot` attaches a class, whose classDef may colour the block.
+function readClass(s, i) {
+  const m = s.slice(i).match(/^:::([A-Za-z0-9_-]+)/);
+  return m ? { next: i + m[0].length, cls: m[1] } : { next: i, cls: null };
 }
 
 // `A & B` -- Mermaid's shorthand for several nodes on one side of a link.
@@ -582,6 +590,9 @@ function parseMermaid(text) {
   const routes = {};
   const linkStyles = {};
   const styles = {};
+  const classDefs = {};   // classDef name -> its style declaration
+  const classOf = {};     // node id -> class names, in the order given
+  const edgeIds = new Set();
   let groupStack = [];
   let sawHeader = false;
   const invisible = [];   // `A ~~~ B`: [from, to], for the layout only
@@ -600,6 +611,7 @@ function parseMermaid(text) {
       if (ref.shape) n.shape = ref.shape;
       if (ref.bold) n.bold = true;
     }
+    if (ref.cls) (classOf[n.id] = classOf[n.id] || []).push(ref.cls);
     return n;
   };
 
@@ -686,7 +698,17 @@ function parseMermaid(text) {
       if (groupStack.length) groupStack[groupStack.length - 1].direction = dirLine[1].toUpperCase().replace('TB', 'TD');
       continue;
     }
+    const classDef = line.match(/^classDef\s+([A-Za-z0-9_,-]+)\s+(.*)$/);
+    if (classDef) { for (const c of classDef[1].split(',')) classDefs[c] = classDef[2]; continue; }
+    const classLine = line.match(/^class\s+([A-Za-z0-9_,\s-]+?)\s+([A-Za-z0-9_-]+)\s*$/);
+    if (classLine) {
+      for (const id of classLine[1].split(',')) (classOf[id.trim()] = classOf[id.trim()] || []).push(classLine[2]);
+      continue;
+    }
     if (/^(classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
+    // `e1@{ animate: true }` styles the link named e1: nothing to draw.
+    const named = line.match(/^([A-Za-z0-9_]+)@\{/);
+    if (named && edgeIds.has(named[1])) continue;
 
     // Anything left is a node declaration or a chain of edges, where either
     // side of a link may be an `A & B` list: every pairing becomes an edge.
@@ -698,6 +720,8 @@ function parseMermaid(text) {
     while (i < s.length) {
       const link = s.slice(i).match(LINK_RE);
       if (!link) break;
+      const edgeId = link[0].match(/([A-Za-z0-9_]+)@/);
+      if (edgeId) edgeIds.add(edgeId[1]);
       i += link[0].length;
       const next = readNodeList(s, i);
       if (!next) break;
@@ -729,7 +753,10 @@ function parseMermaid(text) {
   }
 
   for (const n of d.nodes) {
-    const decl = styles[n.id] || '';
+    // A style line wins over the classes, a later class over an earlier one:
+    // the winner goes first, where the first match below finds it.
+    const decl = [styles[n.id]].concat((classOf[n.id] || []).map((c) => classDefs[c]).reverse(), classDefs.default)
+      .filter(Boolean).join(',');
     if (/fill:\s*none/.test(decl) && /stroke:\s*none/.test(decl)) n.shape = 'text';
     const fill = decl.match(/fill:\s*(#[0-9a-fA-F]{3,8})/);
     if (fill) n.fill = fill[1];
