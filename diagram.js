@@ -207,7 +207,9 @@ function nodeDecl(n) {
 // written with the `==` form so thickness survives in other renderers too;
 // `linkStyle` pins down the exact width. A dotted link has no heavy form.
 function linkToken(e) {
-  const heavy = (e.width || DEFAULT_EDGE_W) >= 3;
+  // From the menu's "heavy" up, so a connector drawn heavy reads as thick to
+  // an LLM and to any other renderer, not just through its linkStyle.
+  const heavy = (e.width || DEFAULT_EDGE_W) >= 2.5;
   if (e.dash === 'dotted') return e.head === 'none' ? '-.-' : e.head === 'both' ? '<-.->' : '-.->';
   if (heavy) return e.head === 'none' ? '===' : e.head === 'both' ? '<==>' : '==>';
   return e.head === 'none' ? '---' : e.head === 'both' ? '<-->' : '-->';

@@ -504,7 +504,10 @@
     return [
       dropdown(DASHES, edge.dash, (v) => applyToEdge((e) => { e.dash = v; }), 'Line style'),
       dropdown(HEADS, edge.head, (v) => applyToEdge((e) => { e.head = v; }), 'Arrowheads'),
-      dropdown(EDGE_WIDTHS, edge.width || DEFAULT_EDGE_W, (v) => applyToEdge((e) => { e.width = +v; }), 'Thickness'),
+      // The nearest entry: a pasted `==>` is 3.5, which no entry is exactly.
+      dropdown(EDGE_WIDTHS, EDGE_WIDTHS.reduce((best, [w]) =>
+        Math.abs(w - (edge.width || DEFAULT_EDGE_W)) < Math.abs(best - (edge.width || DEFAULT_EDGE_W)) ? w : best, EDGE_WIDTHS[0][0]),
+        (v) => applyToEdge((e) => { e.width = +v; }), 'Thickness'),
     ];
   }
 
@@ -525,7 +528,7 @@
   }
 
   function membersText(g) {
-    const names = g.members.map((id) => nodeById(getModel(), id)).filter(Boolean)
+    const names = groupNodeIds(getModel(), g).map((id) => nodeById(getModel(), id)).filter(Boolean)
       .map((n) => n.label || shapeName(n.shape));
     const shown = names.slice(0, 4).join(', ') + (names.length > 4 ? ', …' : '');
     return names.length + ' block' + (names.length === 1 ? '' : 's') + ': ' + shown;
@@ -553,8 +556,10 @@
 
     if (info.edge) {
       const e = info.edge;
-      add(straightButton(e), sep(), ...edgeControls(e), lineColorButton(e), sep(), edgeFontStepper(e),
-          boldButton(e.bold), sep(), button('⇄', reverseEdge, 'Reverse direction'));
+      add(straightButton(e), sep(), ...edgeControls(e), lineColorButton(e), sep());
+      // Text controls only for a connector that has text: most don't.
+      if (e.label) add(edgeFontStepper(e), boldButton(e.bold), sep());
+      add(button('⇄', reverseEdge, 'Reverse direction'));
       if (e.points && e.route !== 'straight') add(button('↺', resetEdgePath, 'Reset path to automatic'));
       add(sep(), more);
     } else if (info.nodes.length) {
@@ -574,7 +579,8 @@
       add(sep(), more);
     } else if (info.groups.length) {
       const g = info.groups[0];
-      add(chip(g.label + ' · ' + g.members.length + ' block' + (g.members.length === 1 ? '' : 's'), membersText(g)),
+      const count = groupNodeIds(getModel(), g).length;
+      add(chip(g.label + ' · ' + count + ' block' + (count === 1 ? '' : 's'), membersText(g)),
           button('Rename', () => editSelectedLabel()), groupFontStepper(g), sep(),
           button('Ungroup', () => reportRefusal(ungroupSelection(), 'ungrouped'), 'Ungroup (Ctrl+Shift+G)'),
           sep(), more);
