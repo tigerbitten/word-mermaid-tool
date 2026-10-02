@@ -73,10 +73,10 @@ Prototype. Word desktop on Windows and Mac.
   diagram back up out of the document. **Update in document** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
   A picture you resized in Word keeps that scale when updated.
-- Pictures are PNGs at 400 ppi. Tick **Vector (SVG)** to insert them as SVG
-  instead, sharp at any zoom and in print (Word 2016 and later; older Word
-  shows the PNG kept inside). If Word refuses it, the picture goes in as a PNG
-  and the status line says so.
+- Pictures go in as SVG, sharp at any zoom and in print (Word 2016 and later;
+  older Word shows the 400 ppi PNG kept inside). If Word refuses the SVG, the
+  picture goes in as a PNG and the status line says so. Untick **Vector (SVG)**
+  for plain PNG pictures.
 
 ### Keyboard
 
