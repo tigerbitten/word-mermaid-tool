@@ -166,17 +166,16 @@ function makeId(label, taken) {
   return id;
 }
 
-// Everything with a meaning inside a Mermaid label is written as an entity: `"`
-// ends the string, `|` ends an edge label, `#` starts an entity, `<`/`>` would
-// read as HTML (a literal "<br/>" typed into a label must stay text), and a
-// raw newline would end the statement.
+// Labels are written as typed, so the alt text reads naturally ("Attempts >=
+// 3?", "C# client", "a|b"), except what Mermaid would take for something else
+// inside a quoted label: `"` ends it, `#name;` is an entity, `<` before a
+// letter or `/` opens an HTML tag (a typed "<br/>" must stay text), and a raw
+// newline would end the statement. Checked against Mermaid 11's renderer.
 function quoteLabel(text) {
   const escaped = String(text == null ? '' : text)
-    .replace(/#/g, '#35;')
+    .replace(/#(?=[A-Za-z0-9]+;)/g, '#35;')
     .replace(/"/g, '#quot;')
-    .replace(/\|/g, '#124;')
-    .replace(/</g, '#lt;')
-    .replace(/>/g, '#gt;')
+    .replace(/<(?=[A-Za-z/!])/g, '#lt;')
     .replace(/\r?\n/g, '<br/>');
   return '"' + escaped + '"';
 }
