@@ -1020,16 +1020,21 @@ function blockToFlowchart(text) {
 // inside braces separates properties). An `accDescr { ... }` block is dropped.
 function joinOpenLines(lines) {
   const out = [];
-  let pending = null;
+  let pending = null;     // the raw lines of a statement still open
   let inDescr = false;
+  const joined = (raw) => raw.reduce((t, l) => t + (open(t).quote ? '\n' : ', ') + l.trim());
   for (const l of lines) {
     if (inDescr) { if (l.includes('}')) inDescr = false; continue; }
     if (pending == null && /^\s*accDescr\s*\{/.test(l) && !l.includes('}')) { inDescr = true; continue; }
-    const text = pending == null ? l : pending + (open(pending).quote ? '\n' : ', ') + l.trim();
-    if (!text.trim().startsWith('%%') && open(text).any) pending = text;
-    else { out.push(text); pending = null; }
+    const raw = pending ? pending.concat([l]) : [l];
+    const text = joined(raw);
+    if (!text.trim().startsWith('%%') && open(text).any) {
+      // A stray quote would otherwise swallow the rest of the diagram: past a
+      // few lines it is taken to be one, and the lines go through as written.
+      if (raw.length > 8) { out.push(...raw); pending = null; } else pending = raw;
+    } else { out.push(text); pending = null; }
   }
-  if (pending != null) out.push(pending);
+  if (pending) out.push(...pending);
   return out;
 
   function open(t) {
