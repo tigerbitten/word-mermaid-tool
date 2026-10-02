@@ -69,13 +69,13 @@ Prototype. Word desktop on Windows and Mac.
   Ctrl+scroll or pinch to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
   in (from an LLM, say). Your edits apply when you go back to the canvas.
-- **Insert into document** drops the picture in. **Open selected** picks a
-  diagram back up out of the document. **Update in document** replaces the
+- **Insert** drops the picture in. **Open** picks a
+  diagram back up out of the document. **Update** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
   A picture you resized in Word keeps that scale when updated.
 - Pictures go in as SVG, sharp at any zoom and in print (Word 2016 and later;
   older Word shows the 400 ppi PNG kept inside). If Word refuses the SVG, the
-  picture goes in as a PNG and the status line says so. Untick **Vector (SVG)**
+  picture goes in as a PNG and the status line says so. Untick **SVG**
   for plain PNG pictures.
 
 ### Keyboard

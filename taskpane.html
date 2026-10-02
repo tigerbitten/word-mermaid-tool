@@ -130,7 +130,14 @@
 
   #actions { border-top: 1px solid #e0e0e0; padding: 0.6rem; flex: none;
     display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.3rem; }
-  #svgOpt { display: flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; color: #555; }
+  #svgOpt { display: flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; color: #555; margin-left: auto; }
+  /* A narrow task pane (Word's default is about 320px) keeps its room for the
+     canvas: the palette is one column of icons, each named in its tooltip. */
+  @media (max-width: 420px) {
+    #palette { width: 3.6rem; grid-template-columns: 1fr; }
+    .pal-item span { display: none; }
+    .pal-head { font-size: 0.55rem; padding: 0.4rem 0 0.1rem; text-align: center; letter-spacing: 0; }
+  }
 </style>
 </head>
 <body>
@@ -175,10 +182,10 @@
   <div id="picker" class="float hidden"></div>
 
   <div id="actions">
-    <button id="insertBtn" class="primary">Insert into document</button>
-    <button id="replaceBtn" title="Replaces the diagram you opened, or the picture selected in the document">Update in document</button>
-    <button id="loadBtn" title="Click a diagram in the document first">Open selected</button>
-    <label id="svgOpt" title="Insert and Update put the diagram in as a vector picture: sharp at any zoom and in print. Word versions without SVG show the built-in PNG copy."><input type="checkbox" id="svgBox"> Vector (SVG)</label>
+    <button id="insertBtn" class="primary" title="Put this diagram into the document, below the cursor">Insert</button>
+    <button id="replaceBtn" title="Replace the diagram you opened (or the one selected in the document) with this one">Update</button>
+    <button id="loadBtn" title="Edit the diagram selected in the document: click it there first">Open</button>
+    <label id="svgOpt" title="Vector pictures: sharp at any zoom and in print. Word versions without SVG show the PNG kept inside. Untick for plain PNG pictures."><input type="checkbox" id="svgBox"> SVG</label>
   </div>
 
 <script src="diagram.js?v=21"></script>
@@ -190,15 +197,16 @@
   document.documentElement.style.fontSize =
     (screen.width >= 2560 ? 18 : screen.width >= 1920 ? 16 : 14) + 'px';
 
-  const STARTER = `flowchart LR
+  // Top to bottom, so it fits a narrow task pane at a readable size.
+  const STARTER = `flowchart TD
   CPU["CPU core"]
   BUS{{"System bus"}}
   MEM[("DRAM")]
   CPU ==>|"addr"| BUS
   BUS --> MEM
 %% CPU 40,40 140x56
-%% BUS 240,40 140x56
-%% MEM 440,40 140x56`;
+%% BUS 40,166 140x56
+%% MEM 40,292 140x56`;
 
   // Every shape the model can serialise, by section, in rail order.
   const SHAPE_SECTIONS = [
@@ -317,6 +325,7 @@
     const label = document.createElement('span');
     label.textContent = shapeName(shape);
     item.appendChild(label);
+    item.title = shapeName(shape);
     return item;
   }
 
@@ -788,7 +797,7 @@
   // --- Word ------------------------------------------------------------
   //
   // Every inserted picture gets a tag in its alt-text title. After an insert
-  // or an Open, "Update in document" finds that picture by its tag, so the
+  // or an Open, Update finds that picture by its tag, so the
   // round trip -- insert, keep editing, update -- works without having to
   // re-select the picture in the document first.
 
@@ -971,7 +980,7 @@
           setModel(d);
           onModelChanged();
           fitView();
-          setStatus('opened -- edit, then press Update in document', 'success');
+          setStatus('opened -- edit, then press Update', 'success');
         });
       } catch (e) {
         setStatus('load failed: ' + describeError(e), 'error');
