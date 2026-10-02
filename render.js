@@ -412,6 +412,7 @@ function shapeElement(n) {
       const glyph = el('path', { d: n.shape === 'image' ? IMAGE_GLYPH : glyphFor(n.icon), class: 'wm-shape', 'data-line': '1',
         transform: `translate(${b.x + b.w / 2 - 12 * k} ${b.y + b.h / 2 - 12 * k}) scale(${k})` });
       glyph.style.strokeWidth = 1.6 / k;
+      glyph.setAttribute('data-glyph', '1');
       glyph.setAttribute('stroke-linecap', 'round');
       glyph.setAttribute('stroke-linejoin', 'round');
       parts.push(glyph);
@@ -566,7 +567,8 @@ function drawNode(parent, n) {
     if (shape.getAttribute('data-line')) shape.style.fill = 'none';
     else if (n.fill && n.fill !== '#ffffff' && !solid.test(shape.getAttribute('class'))) shape.style.fill = n.fill;
     // Border colour, width and dashes from the Mermaid style, where it set them.
-    if (!/wm-bare/.test(shape.getAttribute('class'))) {
+    // A border's width and dashes are for the outline, not an icon's glyph.
+    if (!/wm-bare/.test(shape.getAttribute('class')) && !shape.getAttribute('data-glyph')) {
       if (n.stroke) shape.style.stroke = n.stroke;
       if (n.strokeWidth) shape.style.strokeWidth = n.strokeWidth;
       if (n.dash) shape.style.strokeDasharray = '5 4';
@@ -602,6 +604,7 @@ function drawGroup(parent, g) {
   if (g.fill) box.style.fill = g.fill;
   if (g.stroke) { box.style.stroke = g.stroke; tab.style.fill = g.stroke; }
   if (g.strokeWidth) box.style.strokeWidth = g.strokeWidth;
+  if (g.color) title.style.fill = g.color;
   title.textContent = g.label;
   return node;
 }
@@ -1493,12 +1496,13 @@ function diagramBounds(d) {
     if (LABELLESS.has(n.shape) || !n.label) continue;
     const size = n.fontSize || DEFAULT_FONT_SIZE;
     const area = labelArea(n);
-    const lines = wrapLabel(n.label, area.w - LABEL_PAD_X * 2, size, n.bold);
+    const lines = wrapLabel(shownLabel(n), area.w - LABEL_PAD_X * 2, size, n.bold);
     const tw = Math.max(...lines.map((l) => textWidth(l, size, n.bold)));
     const th = lines.length * lineH(size);
-    const cx = area.x + area.w / 2;
+    // Where drawNode puts it: from the left or right of the text area when aligned.
+    const x0 = n.align === 'left' ? area.x + LABEL_PAD_X : n.align === 'right' ? area.x + area.w - LABEL_PAD_X - tw : area.x + area.w / 2 - tw / 2;
     const cy = area.y + area.h / 2;
-    add(cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2);
+    add(x0, cy - th / 2, x0 + tw, cy + th / 2);
   }
   for (const g of d.groups) {
     if (g.w > 0) add(g.x, g.y, g.x + groupTabWidth(g), g.y + groupTitleH(g));

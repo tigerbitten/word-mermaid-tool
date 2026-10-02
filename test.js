@@ -126,6 +126,32 @@ check('text and border formatting read and written', a0.color === '#dc2626' && a
   a0.strokeWidth === 2.5 && a0.dash && d.edges[0].italic && toMermaid(parseMermaid(out)) === out && /font-style:italic/.test(out), out);
 check('a turned shape keeps its turn', d.nodes[1].rotate === 90 && /%% M 200,0 60x100 r90/.test(out), out);
 
+// Found in review: each once went wrong.
+d = parseMermaid('flowchart LR\n  A --> B');
+d.edges[0].fromPort = 'rs1\nhi';
+check('a pin name with a line break stays on its connector', ids(parseMermaid(toMermaid(d))) === 'A,B', toMermaid(d));
+d = parseMermaid('flowchart LR\n  𠮷野家 --> Shop');
+check('ids outside the basic plane read whole', ids(d) === '𠮷野家,Shop' && ids(parseMermaid(toMermaid(d))) === '𠮷野家,Shop', ids(d));
+d = parseMermaid('flowchart LR\n  A:::hot --> B\n  classDef hot stroke:#dc2626,stroke-width:4px,color:#fff,text-align:left');
+Object.assign(d.nodes[0], { stroke: undefined, strokeWidth: undefined, color: undefined, align: undefined });
+const back = parseMermaid(toMermaid(d)).nodes[0];
+check('clearing what a class sets is kept', !['#dc2626'].includes(back.stroke) && back.strokeWidth !== 4 && back.color !== '#ffffff' && !back.align, back);
+let threw = '';
+try { parseMermaid('flowchart LR\n  A["Order #2000000; shipped"] --> B'); } catch (e) { threw = e.message; }
+check('an out-of-range entity code does not crash', !threw, threw);
+d = parseMermaid('flowchart LR\n  A{Is it\n  ok?} --> B');
+check('an unquoted label over two lines gets no comma', d.nodes[0].label === 'Is it\nok?', d.nodes[0].label);
+d = parseMermaid('---\ntitle: a "q" \\ b\n---\nflowchart LR\n  A --> B');
+const t1 = parseMermaid(toMermaid(parseMermaid(toMermaid(d)))).title;
+check('a title with quotes and backslashes is stable', t1 === d.title, [d.title, t1]);
+d = parseMermaid('flowchart LR\n  A ~~~ B\n  B --> C\n  linkStyle 1 stroke:#ff0000');
+check('linkStyle counts invisible links, as Mermaid does', d.edges[0].color === '#ff0000', d.edges);
+d = parseMermaid('flowchart LR\n  A["x"] --> B');
+d.nodes[0].label = '`npm run`';
+check('a typed label in backticks stays as typed', parseMermaid(toMermaid(d)).nodes[0].label === '`npm run`', toMermaid(d).split('\n')[1]);
+d = parseMermaid('flowchart LR\n  A["Tom &amp; Jerry&nbsp;Co"] --> B');
+check('HTML entities decoded', d.nodes[0].label === 'Tom & Jerry\u00a0Co', d.nodes[0].label);
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&

@@ -751,6 +751,7 @@ function removeSelectionFromGroup() {
 // step; endPreview keeps the result, cancelPreview puts things back.
 let previewing = false;
 let previewPushed = false;
+let previewSnapshot = null;   // the undo entry the preview pushed
 function beginPreview() { previewing = true; }
 function endPreview() {
   const pushed = previewPushed;
@@ -758,14 +759,16 @@ function endPreview() {
   if (pushed) commit();
 }
 function cancelPreview() {
-  if (previewPushed) model = JSON.parse(undoStack.pop());
+  // Only if nothing has been pushed or undone since: then that entry is ours.
+  if (previewPushed && undoStack[undoStack.length - 1] === previewSnapshot) model = JSON.parse(undoStack.pop());
   previewing = previewPushed = false;
+  previewSnapshot = null;
   render();
 }
 // Returns true when the change was a preview (shown, not yet committed).
 function previewStep(apply) {
   if (!previewing) return false;
-  if (!previewPushed) { pushUndo(); previewPushed = true; }
+  if (!previewPushed) { pushUndo(); previewPushed = true; previewSnapshot = undoStack[undoStack.length - 1]; }
   apply();
   render();
   return true;
@@ -824,6 +827,8 @@ function reverseEdge() {
   applyToEdge((e) => {
     [e.from, e.to] = [e.to, e.from];
     [e.fromAnchor, e.toAnchor] = [e.toAnchor, e.fromAnchor];
+    [e.fromPort, e.toPort] = [e.toPort, e.fromPort];
+    if (e.labelAt != null) e.labelAt = Math.round((1 - e.labelAt) * 100) / 100;
     if (e.points) e.points.reverse();
   });
 }
@@ -1009,8 +1014,9 @@ function pasteClipboard(dx, dy) {
   }
   const madeGroups = [];
   for (const g of clipboard.groups || []) {
-    const copy = { id: makeId(g.label, taken), label: g.label, members: g.members.map((m) => remap[m]),
-                   parent: g.parent, fontSize: g.fontSize, x: 0, y: 0, w: 0, h: 0 };
+    // Everything the group has (colours, classes, direction), with a new id.
+    const copy = Object.assign(JSON.parse(JSON.stringify(g)), { id: makeId(g.label, taken), members: g.members.map((m) => remap[m]),
+                   x: 0, y: 0, w: 0, h: 0 });
     taken.add(copy.id);
     remap[g.id] = copy.id;
     model.groups.push(copy);
@@ -1495,6 +1501,8 @@ function moveEnd(ev, p) {
         hit.at = anchorPoint(target, hit.side, hit.t);
       }
     }
+    // A pin name belongs to the block it was on.
+    if (e[end] !== target.id) e[end + 'Port'] = undefined;
     e[end] = target.id;
     e[end + 'Anchor'] = exact ? { side: hit.side, t: hit.t } : null;
     if (exact) drag.attachAt = hit.at;
@@ -1691,6 +1699,7 @@ function onPointerMove(ev) {
     if (ev.shiftKey && c.length === 2) {
       // Shift on a corner keeps the proportions, as in PowerPoint and Miro.
       // Not snapped, because snapping each side separately would undo it.
+      drag.guides = [];
       const k = Math.max(w / b.w, h / b.h, minW / b.w, minH / b.h);
       w = Math.round(b.w * k);
       h = Math.round(b.h * k);
@@ -1699,6 +1708,7 @@ function onPointerMove(ev) {
       if (c.includes('n') || c.includes('s')) h = Math.max(minH, Math.round(h));
       // The dragged sides line up with other blocks' edges, or the size with
       // another block's, when within a few pixels -- shown by a guide.
+      drag.guides = [];
       if (!ev.altKey) {
         const fit = resizeGuides(drag.node, b, c, w, h);
         w = Math.max(minW, fit.w);
@@ -1885,7 +1895,10 @@ function onDoubleClick(ev) {
     // Near either end it names that end's pin; elsewhere it edits the text.
     const pts = edgeGeometry(model)[ei];
     const near = (q) => Math.hypot(q.x - p.x, q.y - p.y) < 24 / view.zoom + 6;
-    if (pts && !freeLine(model.edges[ei]) && near(pts[0])) editPort(ei, 'from');
+    const box = labelBoxes(model)[ei];
+    const onText = box && p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h;
+    if (onText) editEdgeLabel(ei);
+    else if (pts && !freeLine(model.edges[ei]) && near(pts[0])) editPort(ei, 'from');
     else if (pts && !freeLine(model.edges[ei]) && near(pts[pts.length - 1])) editPort(ei, 'to');
     else editEdgeLabel(ei);
     return;
@@ -1917,7 +1930,7 @@ function editPort(index, end) {
   const at = end === 'from' ? pts[0] : pts[pts.length - 1];
   const key = end === 'from' ? 'fromPort' : 'toPort';
   beginLabelEdit({ label: e[key] || '', fontSize: 11, from: true }, undefined, { x: at.x - 40, y: at.y - 14, w: 80, h: 28 },
-    (v) => { if (model.edges.includes(e)) e[key] = v || undefined; });
+    (v) => { if (model.edges.includes(e)) e[key] = v.replace(/\s+/g, ' ').trim() || undefined; });
 }
 
 // A textarea rather than an input so labels can wrap onto two lines, which
@@ -2012,6 +2025,9 @@ function editSelectedLabel(seed) {
 // Word claims keys that reach the host, so everything handled here is also
 // stopped from propagating.
 function onKeyDown(ev) {
+  // A key while a colour is only being shown (hovered) puts it back first,
+  // so the key acts on the diagram as it really is.
+  if (previewing) cancelPreview();
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (!ev.key) return;            // IME composition and some synthetic events

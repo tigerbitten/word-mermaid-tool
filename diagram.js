@@ -240,7 +240,8 @@ function quoteLabel(text) {
     .replace(/#(?=[A-Za-z0-9]+;)/g, '#35;')
     .replace(/"/g, '#quot;')
     .replace(/<(?=[A-Za-z/!])/g, '#lt;')
-    .replace(/\r?\n/g, '<br/>');
+    .replace(/\r?\n/g, '<br/>')
+    .replace(/^`(?=[\s\S]*`$)/, '#96;');
   return '"' + escaped + '"';
 }
 
@@ -253,9 +254,12 @@ function unquoteLabel(raw) {
   let s = String(raw == null ? '' : raw).trim();
   if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') s = s.slice(1, -1);
   // One pass, so a decoded `#` never starts another code: `#35;42;` is "#42;".
+  // HTML's own &amp; &nbsp; ... are decoded too: Mermaid shows them as such.
   return s
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/#(\w+);/g, (m, code) => /^\d+$/.test(code) ? String.fromCodePoint(+code)
+    .replace(/&(amp|lt|gt|quot|nbsp|apos|#\d+);/g, (m, code) => code[0] === '#' ? (+code.slice(1) > 0 && +code.slice(1) <= 0x10ffff ? String.fromCodePoint(+code.slice(1)) : m)
+      : { amp: '&', lt: '<', gt: '>', quot: '"', nbsp: '\u00a0', apos: "'" }[code])
+    .replace(/#(\w+);/g, (m, code) => /^\d+$/.test(code) ? (+code > 0 && +code <= 0x10ffff ? String.fromCodePoint(+code) : m)
       : code === 'quot' ? '"' : code === 'lt' ? '<' : code === 'gt' ? '>' : ENTITIES[code] || m);
 }
 
@@ -313,7 +317,7 @@ function readLook(decl) {
     if (key === 'font-weight') set('bold', /bold|[6-9]00/.test(value));
     if (key === 'font-style') set('italic', value === 'italic' || value === 'oblique');
     if (key === 'text-decoration') set('underline', /underline/.test(value));
-    if (key === 'text-align' && /^(left|right)$/.test(value)) set('align', value);
+    if (key === 'text-align' && /^(left|right|center)$/.test(value)) set('align', value);
   }
   return look;
 }
@@ -323,7 +327,10 @@ function nodeDecl(n) {
   // A single space, not "": Mermaid shows a node's id in place of an empty
   // label, so "" would print "point" wherever the diagram is rendered.
   if (isPoint(n)) return n.id + '@{ shape: text, label: " " }';
-  const extra = n.mediaExtra ? ', ' + n.mediaExtra : '';
+  // The picture's size: the block less a line for the label under it.
+  const ph = Math.round(Math.max(16, n.h - (n.label ? 23 : 0)));
+  const extra = (n.mediaExtra ? ', ' + n.mediaExtra : '') +
+    (n.mediaSized ? (n.shape === 'image' ? ', w: ' + Math.round(n.w) : '') + ', h: ' + (n.shape === 'image' ? ph : Math.round(Math.min(n.w, ph))) : '');
   if (n.shape === 'icon') return n.id + '@{ icon: ' + JSON.stringify(n.icon || '') + (n.form ? ', form: ' + JSON.stringify(n.form) : '') + ', label: ' + quoteLabel(n.label) + extra + ' }';
   if (n.shape === 'image') return n.id + '@{ img: ' + JSON.stringify(n.img || '') + ', label: ' + quoteLabel(n.label) + extra + ' }';
   if (s.v11) {
@@ -371,12 +378,16 @@ function styleDecl(n, d) {
   else {
     const fill = n.fill || '#ffffff';
     if (fill !== (base.fill || '#ffffff')) parts.push('fill:' + fill);
-    const stroke = n.stroke || (fill !== '#ffffff' && !base.stroke ? '#333' : null);
+    // Unset but given by a class: the default is written out, or the class
+    // would win where the canvas shows the default.
+    const stroke = n.stroke || (base.stroke ? '#333' : fill !== '#ffffff' ? '#333' : null);
     if (stroke && stroke !== base.stroke) parts.push('stroke:' + stroke);
   }
-  if (n.strokeWidth && n.strokeWidth !== base.strokeWidth) parts.push('stroke-width:' + n.strokeWidth + 'px');
+  const width = n.strokeWidth || (base.strokeWidth ? 1.5 : null);
+  if (width && width !== base.strokeWidth) parts.push('stroke-width:' + width + 'px');
   if (!!n.dash !== !!base.dash) parts.push('stroke-dasharray:' + (n.dash ? '5 4' : '0'));
-  if (n.color && n.color !== base.color) parts.push('color:' + n.color);
+  const color = n.color || (base.color ? '#111111' : null);
+  if (color && color !== base.color) parts.push('color:' + color);
   if (n.fontSize && n.fontSize !== (base.fontSize || DEFAULT_FONT_SIZE)) parts.push('font-size:' + n.fontSize + 'px');
   if (!!n.bold !== !!base.bold) parts.push('font-weight:' + (n.bold ? 'bold' : 'normal'));
   if (!!n.italic !== !!base.italic) parts.push('font-style:' + (n.italic ? 'italic' : 'normal'));
@@ -527,7 +538,7 @@ function toMermaid(d) {
   // Named pins, which Mermaid has no syntax for, said in a comment an LLM
   // reads as written: `RF.rs1 --> ALU.a` is RF's pin rs1 wired to ALU's pin a.
   const pinned = d.edges.filter((e) => e.fromPort || e.toPort)
-    .map((e) => e.from + (e.fromPort ? '.' + e.fromPort : '') + ' --> ' + e.to + (e.toPort ? '.' + e.toPort : ''));
+    .map((e) => e.from + (e.fromPort ? '.' + e.fromPort : '') + ' --> ' + e.to + (e.toPort ? '.' + e.toPort : '')).map((t) => t.replace(/\s*\n\s*/g, ' '));
   if (pinned.length) lines.splice(lines.indexOf('flowchart ' + direction) + 1, 0, '  %% ports: ' + pinned.join('; '));
 
   // Connectors grouped by the block they leave, in that same order, so the
@@ -712,7 +723,11 @@ function readProps(body) {
 function readNodeRef(s, i) {
   while (i < s.length && /\s/.test(s[i])) i++;
   const start = i;
-  while (i < s.length && (/[\p{L}\p{N}_]/u.test(s[i]) || (s[i] === '-' && i > start && /[\p{L}\p{N}_]/u.test(s[i + 1] || '')))) i++;
+  // By code point, not UTF-16 unit, so an id like 𠮷野家 reads whole.
+  const idRe = /[\p{L}\p{N}_]+(?:-[\p{L}\p{N}_]+)*/uy;
+  idRe.lastIndex = i;
+  const idMatch = idRe.exec(s);
+  if (idMatch) i += idMatch[0].length;
   if (i === start) return null;
   const id = s.slice(start, i);
 
@@ -724,8 +739,12 @@ function readNodeRef(s, i) {
     // An icon or an image node: Mermaid's own kinds, kept with their source.
     const media = props.icon ? { shape: 'icon', icon: unquoteLabel(props.icon), form: props.form ? unquoteLabel(props.form) : null }
       : props.img ? { shape: 'image', img: unquoteLabel(props.img) } : null;
-    // Their other settings (label position, size, aspect lock) ride along as written.
-    if (media) media.extra = ['pos', 'w', 'h', 'constraint'].filter((k) => props[k] != null).map((k) => k + ': ' + props[k]).join(', ') || null;
+    // Their label position and aspect lock ride along as written; a size, if
+    // given, is written back from the block's own size (which the editor may
+    // change), not as read.
+    if (media) media.sized = props.w != null || props.h != null;
+    if (media && media.sized) media.size = { w: parseFloat(props.w) || null, h: parseFloat(props.h) || null };
+    if (media) media.extra = ['pos', 'constraint'].filter((k) => props[k] != null).map((k) => k + ': ' + props[k]).join(', ') || null;
     return Object.assign({ id, shape: props.shape ? SHAPE_BY_V11[props.shape] || 'rect' : null,
              label: props.label != null ? unquoteLabel(props.label) : null, next: end.next, cls: end.cls }, media);
   }
@@ -737,7 +756,7 @@ function readNodeRef(s, i) {
     if (s[from] === '"') from = skipQuoted(s, from);
     const end = s.indexOf(close, from);
     if (end === -1) continue;
-    const md = markdownLabel(unquoteLabel(s.slice(i + open.length, end)));
+    const md = markdownLabel(s.slice(i + open.length, end));
     return Object.assign({ id, shape, label: md.label, bold: md.bold }, readClass(s, end + close.length));
   }
   return Object.assign({ id, shape: null, label: null }, readClass(s, i));
@@ -746,13 +765,15 @@ function readNodeRef(s, i) {
 // Mermaid's markdown string, "`**bold** text`": the backticks and the bold
 // markers are markup, not text. A label that is bold throughout becomes a bold
 // block; bold on part of one can't be shown, so only the markers go.
-function markdownLabel(label) {
-  const m = label.match(/^`([\s\S]*)`$/);
-  if (!m) return { label, bold: false };
+function markdownLabel(raw) {
+  // Looked for before entities are decoded: a typed label that happens to
+  // be in backticks is written with its first one as #96; and stays text.
+  const m = String(raw).trim().replace(/^"([\s\S]*)"$/, '$1').match(/^`([\s\S]*)`$/);
+  if (!m) return { label: unquoteLabel(raw), bold: false };
   const bold = /^\*\*[^*]+\*\*$/.test(m[1].trim());
   // Bold and italic markers are markup; italics can't be shown, so they just go.
   const text = m[1].replace(/\*\*/g, '').replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=$|[^\w*])/g, '$1$2').trim();
-  return { label: text, bold };
+  return { label: unquoteLabel(text), bold };
 }
 
 // `A:::hot` attaches a class, whose classDef may colour the block.
@@ -1050,7 +1071,9 @@ function joinOpenLines(lines) {
   const out = [];
   let pending = null;     // the raw lines of a statement still open
   let descr = null;       // the lines of an `accDescr { ... }` block being read
-  const joined = (raw) => raw.reduce((t, l) => t + (open(t).quote ? '\n' : ', ') + l.trim());
+  // Inside quotes a line break; inside @{ } a property separator; inside a
+  // shape's own brackets ({Is it / ok?}) a line break too.
+  const joined = (raw) => raw.reduce((t, l) => t + (!open(t).quote && /@\{[^}]*$/.test(t) ? ', ' : '\n') + l.trim());
   for (const l of lines) {
     if (descr) { descr.push(l.trim()); if (l.includes('}')) { out.push(descr.join('\n')); descr = null; } continue; }
     if (pending == null && /^\s*accDescr\s*\{/.test(l) && !l.includes('}')) { descr = [l.trim()]; continue; }
@@ -1092,6 +1115,7 @@ function parseMermaid(text) {
   const routes = {};
   const labelsAt = {};
   const ports = {};
+  let linkNo = 0;
   const linkStyles = {};
   const styles = {};
   const classDefs = {};   // classDef name -> its style declaration
@@ -1115,6 +1139,14 @@ function parseMermaid(text) {
       if (ref.icon) { n.icon = ref.icon; if (ref.form) n.form = ref.form; }
       if (ref.img) n.img = ref.img;
       if (ref.extra) n.mediaExtra = ref.extra;
+      if (ref.sized) {
+        // The block is the picture plus a line for its label.
+        n.mediaSized = true;
+        const lab = n.label ? 23 : 0;
+        const h = ref.size.h || ref.size.w || n.h - lab;
+        if (n.shape === 'image') { n.w = Math.max(ref.size.w || h, 16); n.h = h + lab; }
+        else { n.w = Math.max(n.w, h); n.h = h + lab; }
+      }
       d.nodes.push(n);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
@@ -1140,7 +1172,12 @@ function parseMermaid(text) {
     const close = lines.findIndex((l, k) => k > 0 && l.trim() === '---');
     if (close === -1) throw new Error('front matter opened with --- is never closed');
     const title = lines.slice(1, close).map((l) => l.match(/^\s*title:\s*(.*?)\s*$/)).find(Boolean);
-    if (title && title[1]) d.title = title[1].replace(/^(["'])(.*)\1$/, '$2');
+    if (title && title[1]) {
+      // Written by JSON.stringify, so read the same way; single quotes as is.
+      let t = title[1].replace(/^'(.*)'$/, '$1');
+      if (/^".*"$/.test(t)) { try { t = JSON.parse(t); } catch (e) { t = t.slice(1, -1); } }
+      d.title = t;
+    }
     kept.front = lines.slice(1, close).filter((l) => l.trim() && !/^\s*title:/.test(l));
     lines = lines.slice(close + 1);
   }
@@ -1206,7 +1243,7 @@ function parseMermaid(text) {
     // parse the keyword itself as a block called "subgraph".
     if (/^subgraph\b/.test(line)) {
       const sub = line.match(/^subgraph\s+([\p{L}\p{N}_-]+)\s*(?:\[(.*)\])?\s*$/u);
-      const label = markdownLabel(sub ? (sub[2] ? unquoteLabel(sub[2]) : sub[1]) : unquoteLabel(line.slice(9).trim())).label;
+      const label = markdownLabel(sub ? (sub[2] ? sub[2] : sub[1]) : line.slice(9).trim()).label;
       const id = sub ? sub[1] : makeId(label, new Set(d.groups.map((g) => g.id)));
       const g = { id, label, members: [], parent: groupStack.length ? groupStack[groupStack.length - 1].id : null,
                   x: 0, y: 0, w: 0, h: 0 };
@@ -1266,14 +1303,16 @@ function parseMermaid(text) {
       i = next.next;
       const targets = next.refs.map(ensureNode);
       if (link.token.startsWith('~')) {
-        for (const a of prev) for (const b of targets) invisible.push([a.id, b.id]);
+        for (const a of prev) for (const b of targets) { invisible.push([a.id, b.id]); linkNo++; }
         prev = targets;
         continue;
       }
       for (const a of prev) {
         for (const b of targets) {
           const e = Object.assign(newEdge(a.id, b.id), linkFromToken(link.token));
-          e.label = link.label ? markdownLabel(unquoteLabel(link.label)).label : '';
+          e.label = link.label ? markdownLabel(link.label).label : '';
+          // Mermaid numbers links for linkStyle counting the invisible ones too.
+          e.linkNo = linkNo++;
           d.edges.push(e);
         }
       }
@@ -1309,12 +1348,13 @@ function parseMermaid(text) {
     if (look.bold) n.bold = true;
     if (look.italic) n.italic = true;
     if (look.underline) n.underline = true;
-    if (look.align) n.align = look.align;
+    if (look.align && look.align !== 'center') n.align = look.align;
     if (classOf[n.id]) n.classes = classOf[n.id].filter((c, k, all) => all.indexOf(c) === k);
   }
   d.edges.forEach((e, i) => {
     // A connector's own linkStyle first, then `linkStyle default`.
-    const look = readLook([linkStyles[i], linkStyles.default].filter(Boolean).join(','));
+    const look = readLook([linkStyles[e.linkNo], linkStyles.default].filter(Boolean).join(','));
+    delete e.linkNo;
     if (look.strokeWidth) e.width = look.strokeWidth;
     if (look.stroke && look.stroke !== 'none') e.color = look.stroke;
     if (look.dash) e.dash = 'dotted';
