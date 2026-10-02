@@ -34,6 +34,8 @@
     grid-template-columns: 1fr 1fr; gap: 0.15rem; }
   .pal-head { grid-column: 1 / -1; font-size: 0.62rem; color: #888; text-transform: uppercase;
     letter-spacing: 0.05em; padding: 0.45rem 0.3rem 0.1rem; }
+  .pal-fold { cursor: pointer; }
+  .pal-fold:hover { color: #2563eb; }
   .pal-item { display: flex; flex-direction: column; align-items: center;
     padding: 0.35rem 0; border-radius: 5px; cursor: grab; }
   .pal-item:hover { background: #eef3fd; }
@@ -217,6 +219,14 @@
     ['Systems', [['cylinder', 'Memory'], ['hexagon', 'Bus'], ['document', 'Document'], ['diamond', 'Decision'],
                  ['parallelogram', 'I/O'], ['parallelogram_alt', 'Data'], ['circle', 'Node'],
                  ['doublecircle', 'State'], ['flag', 'Tag']]],
+    ['Architecture', [['cloud', 'Cloud'], ['person', 'Person'], ['browser', 'Browser'], ['console', 'Terminal'],
+                      ['bucket', 'Bucket'], ['folder', 'Folder'], ['disk', 'Disk'], ['brace', 'Note']]],
+    // The rest of the flowchart symbol set: rarely wanted, so folded away.
+    ['More', [['manual_input', 'Manual input'], ['display', 'Display'], ['card', 'Card'], ['documents', 'Documents'],
+              ['stored', 'Stored data'], ['storage', 'Storage'], ['datastore', 'Data store'], ['loop_limit', 'Loop limit'],
+              ['collate', 'Collate'], ['manual_file', 'Manual file'], ['lined', 'Lined'], ['divided', 'Divided'],
+              ['tagged', 'Tagged'], ['lined_doc', 'Lined doc'], ['tagged_doc', 'Tagged doc'], ['brace_r', 'Note right'],
+              ['braces', 'Braces'], ['stop', 'Stop'], ['bolt', 'Link']], 'folded'],
   ];
   const SHAPES_ALL = SHAPE_SECTIONS.flatMap(([, list]) => list);
   // Free-standing lines, Miro's line tool: dropped loose, ends dragged onto
@@ -301,9 +311,10 @@
     const parts = shapeElement({ ...box, shape });
     for (const p of parts) {
       const solid = /wm-solid/.test(p.getAttribute('class') || '');
+      const bare = /wm-bare/.test(p.getAttribute('class') || '');
       p.removeAttribute('class');
       p.setAttribute('fill', p.getAttribute('data-line') ? 'none' : solid ? '#333' : '#fff');
-      p.setAttribute('stroke', '#333');
+      p.setAttribute('stroke', bare ? 'none' : '#333');
       p.setAttribute('stroke-width', '1.5');
       icon.appendChild(p);
     }
@@ -337,13 +348,32 @@
 
   function buildPalette() {
     const host = document.getElementById('palette');
-    for (const [title, list] of [['Lines', LINE_TOOLS]].concat(SHAPE_SECTIONS)) {
+    for (const [title, list, folded] of [['Lines', LINE_TOOLS]].concat(SHAPE_SECTIONS)) {
       const head = document.createElement('div');
       head.className = 'pal-head';
       head.textContent = title;
       host.appendChild(head);
+      const items = [];
+      if (folded) {
+        // Opened by clicking its heading; remembered.
+        let open = false;
+        try { open = localStorage.getItem('palette:' + title) === 'open'; } catch (e) { /* stays folded */ }
+        const show = () => {
+          head.textContent = (open ? '\u25be ' : '\u25b8 ') + title;
+          items.forEach((it) => { it.style.display = open ? '' : 'none'; });
+        };
+        head.classList.add('pal-fold');
+        head.title = 'Show or hide these shapes';
+        head.addEventListener('click', () => {
+          open = !open;
+          try { localStorage.setItem('palette:' + title, open ? 'open' : 'closed'); } catch (e) { /* not remembered */ }
+          show();
+        });
+        setTimeout(show);
+      }
       for (const [shape, name] of list) {
         const item = shapeTile(shape);
+        items.push(item);
         item.draggable = true;
         item.title = 'Drag onto the canvas, or click then click where you want it';
         item.addEventListener('dragstart', (ev) => {
@@ -399,12 +429,20 @@
     // whichever shape happens to come first in the list.
     const same = nodes.every((n) => n.shape === nodes[0].shape);
     const options = same ? SHAPES_ALL : [['', 'Shape…']].concat(SHAPES_ALL);
-    return dropdown(options, same ? nodes[0].shape : '', (v) => v && applyToNodes((n) => {
+    const s = dropdown(options, same ? nodes[0].shape : '', (v) => v && applyToNodes((n) => {
       // Switching into or out of a wiring symbol changes what size makes sense.
       if (LABELLESS.has(v) !== LABELLESS.has(n.shape)) { const [w, h] = defaultSize(v); n.w = w; n.h = h; }
       n.shape = v;
       fitNodeSize(n);
     }), 'Shape');
+    // Headed by palette section, so a long list is still easy to scan.
+    for (const [title, list] of SHAPE_SECTIONS) {
+      const group = document.createElement('optgroup');
+      group.label = title;
+      for (const [shape] of list) group.appendChild(s.querySelector(`option[value="${shape}"]`));
+      s.appendChild(group);
+    }
+    return s;
   }
 
   // The size is read at click time, not captured when the control is built:

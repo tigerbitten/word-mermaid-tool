@@ -27,6 +27,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const SVG_STYLE = `
   .wm-shape { fill: #ffffff; stroke: #333333; stroke-width: 1.5; }
   .wm-solid { fill: #333333; }
+  .wm-bare  { stroke: none; }
   .wm-label { font-family: ${FONT_STACK}; font-size: ${DEFAULT_FONT_SIZE}px; fill: #111111;
               text-anchor: middle; dominant-baseline: middle; }
   .wm-edge  { fill: none; stroke: ${EDGE_COLOR}; stroke-width: ${DEFAULT_EDGE_W}; stroke-linejoin: round;
@@ -91,6 +92,26 @@ function labelArea(n) {
   if (['circle', 'doublecircle'].includes(n.shape)) return { x: x + w * 0.15, y: y + h * 0.15, w: w * 0.7, h: h * 0.7 };
   if (n.shape === 'hexagon') { const i = Math.min(18, w * 0.2); return { x: x + i, y, w: w - 2 * i, h }; }
   if (/^(parallelogram|trapezoid)/.test(n.shape)) { const sl = Math.min(20, w * 0.2); return { x: x + sl, y, w: w - 2 * sl, h }; }
+  const bar = Math.min(16, h / 4);
+  switch (n.shape) {
+    case 'cloud': return { x: x + w * 0.12, y: y + h * 0.28, w: w * 0.76, h: h * 0.56 };
+    case 'person': { const r = personHead(n); return { x, y: y + 2 * r + 4, w, h: h - 2 * r - 4 }; }
+    case 'browser': case 'console': case 'divided': return { x, y: y + bar, w, h: h - bar };
+    case 'storage': return { x: x + 10, y: y + 10, w: w - 10, h: h - 10 };
+    case 'lined': case 'lined_doc': { const a = n.shape === 'lined_doc' ? Math.min(8, h * 0.15) : 0; return { x: x + 8, y, w: w - 8, h: h - a }; }
+    case 'disk': case 'bucket': { const r = Math.min(12, h / 4); return { x, y: y + r * 2, w, h: h - r * 2 }; }
+    case 'folder': return { x, y: y + 8, w, h: h - 8 };
+    case 'documents': { const a = Math.min(8, h * 0.15); return { x, y: y + 8, w: w - 8, h: h - 8 - a }; }
+    case 'tagged_doc': { const a = Math.min(8, h * 0.15); return { x, y, w, h: h - a }; }
+    case 'stored': case 'display': { const r = Math.min(14, w / 6); return { x: x + r, y, w: w - 2 * r, h }; }
+    case 'loop_limit': case 'card': { const c = Math.min(12, h / 3); return { x, y: y + c / 2, w, h: h - c / 2 }; }
+    case 'manual_input': { const sl = Math.min(14, h * 0.3); return { x, y: y + sl, w, h: h - sl }; }
+    case 'manual_file': return { x: x + w * 0.2, y, w: w * 0.6, h: h * 0.5 };
+    case 'collate': return { x: x + w * 0.15, y, w: w * 0.7, h: h * 0.3 };
+    case 'brace': return { x: x + 14, y, w: w - 14, h };
+    case 'brace_r': return { x, y, w: w - 14, h };
+    case 'braces': return { x: x + 14, y, w: w - 28, h };
+  }
   return n;
 }
 
@@ -125,6 +146,47 @@ function sizeForLabel(n) {
   const textW = Math.min(240, one / 3 + LABEL_PAD_X * 2 + 20);
   n.w = Math.max(n.w, Math.ceil(textW * n.w / labelArea(n).w / 10) * 10);
   fitNodeSize(n);
+}
+
+function personHead(n) { return Math.min(n.h * 0.17, n.w * 0.25, 14); }
+
+// A cloud's outline as cubic curves, fractions of its box: drawn from these and
+// sampled from these, so connectors meet the bumps the reader sees.
+const CLOUD = [[0.25, 0.92], [0.02, 0.92, 0.0, 0.5, 0.2, 0.47], [0.13, 0.12, 0.45, 0.02, 0.52, 0.22],
+  [0.62, 0.0, 0.92, 0.08, 0.84, 0.38], [1.02, 0.42, 1.03, 0.92, 0.78, 0.92], [0.62, 1.04, 0.4, 1.04, 0.25, 0.92]];
+
+function cloudPoints(n) {
+  const P = ([fx, fy]) => ({ x: n.x + fx * n.w, y: n.y + fy * n.h });
+  let at = P(CLOUD[0]);
+  const pts = [at];
+  for (const c of CLOUD.slice(1)) {
+    const [p1, p2, p3] = [P(c.slice(0, 2)), P(c.slice(2, 4)), P(c.slice(4, 6))];
+    for (let k = 1; k <= 10; k++) {
+      const t = k / 10, u = 1 - t;
+      pts.push({ x: u * u * u * at.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+                 y: u * u * u * at.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y });
+    }
+    at = p3;
+  }
+  return pts;
+}
+
+function cloudPath(n) {
+  const P = (fx, fy) => `${n.x + fx * n.w} ${n.y + fy * n.h}`;
+  return 'M' + P(...CLOUD[0]) + CLOUD.slice(1).map((c) => 'C' + P(c[0], c[1]) + ' ' + P(c[2], c[3]) + ' ' + P(c[4], c[5])).join('') + 'Z';
+}
+
+// A document's wavy bottom edge, from the right corner back to the left.
+function docBottom(x, y, w, h, a) {
+  return `V${y + h - a}C${x + w * 0.75} ${y + h - a * 3} ${x + w * 0.25} ${y + h + a} ${x} ${y + h - a}Z`;
+}
+
+// A curly brace down the side at `x`, its point toward `dir` (-1 left, 1 right).
+function braceD(x, y, h, dir) {
+  const k = 7 * dir;
+  const m = y + h / 2;
+  return `M${x - k} ${y}Q${x} ${y} ${x} ${y + 8}V${m - 6}Q${x} ${m} ${x + k} ${m}` +
+         `Q${x} ${m} ${x} ${m + 6}V${y + h - 8}Q${x} ${y + h} ${x - k} ${y + h}`;
 }
 
 // Returns the shape's elements in drawing order. Anything marked data-line is
@@ -244,6 +306,122 @@ function shapeElement(n) {
     }
     case 'bar':
       return [el('rect', { x, y, width: w, height: h, rx: Math.min(2, w / 2), class: 'wm-shape wm-solid' })];
+    case 'cloud':
+      return [el('path', { d: cloudPath(n), class: 'wm-shape' })];
+    // Head and shoulders, the person / actor of every architecture diagram.
+    case 'person': {
+      const r = personHead(n);
+      const top = y + 2 * r + 4;
+      return [
+        el('ellipse', { cx, cy: y + r, rx: r, ry: r, class: 'wm-shape' }),
+        el('rect', { x, y: top, width: w, height: y + h - top, rx: Math.min(14, (y + h - top) / 2), class: 'wm-shape' }),
+      ];
+    }
+    // A window: title bar with three dots.
+    case 'browser': {
+      const b = Math.min(16, h / 4);
+      return [
+        el('rect', { x, y, width: w, height: h, rx: 4, class: 'wm-shape' }),
+        line(`M${x} ${y + b}H${x + w}`),
+      ].concat([0, 1, 2].map((k) => el('ellipse', { cx: x + 8 + k * 7, cy: y + b / 2, rx: 2.2, ry: 2.2, class: 'wm-shape wm-solid' })));
+    }
+    // A terminal: dark title bar, a prompt.
+    case 'console': {
+      const b = Math.min(16, h / 4);
+      return [
+        el('rect', { x, y, width: w, height: h, rx: 4, class: 'wm-shape' }),
+        el('path', { d: `M${x} ${y + b}V${y + 4}Q${x} ${y} ${x + 4} ${y}H${x + w - 4}Q${x + w} ${y} ${x + w} ${y + 4}V${y + b}Z`, class: 'wm-shape wm-solid' }),
+        line(`M${x + 8} ${y + b + 6}l5 4l-5 4M${x + 16} ${y + b + 15}h7`),
+      ];
+    }
+    // Object storage: a pail, wider at the top.
+    case 'bucket': {
+      const r = Math.min(12, h / 4);
+      const t = w * 0.1;
+      return [
+        el('path', { d: `M${x} ${y + r}A${w / 2} ${r} 0 0 1 ${x + w} ${y + r}L${x + w - t} ${y + h - r}` +
+                        `A${w / 2 - t} ${r} 0 0 1 ${x + t} ${y + h - r}Z`, class: 'wm-shape' }),
+        line(`M${x} ${y + r}A${w / 2} ${r} 0 0 0 ${x + w} ${y + r}`),
+      ];
+    }
+    case 'folder':
+      return [el('path', { d: `M${x} ${y}H${x + w * 0.35}L${x + w * 0.35 + 8} ${y + 8}H${x + w}V${y + h}H${x}Z`, class: 'wm-shape' })];
+    // A data-flow-diagram store: open-ended, a line above and below.
+    case 'datastore':
+      return [
+        el('rect', { x, y, width: w, height: h, class: 'wm-shape wm-bare' }),
+        line(`M${x} ${y}H${x + w}M${x} ${y + h}H${x + w}`),
+      ];
+    case 'disk': {
+      const ry = Math.min(12, h / 4);
+      return [
+        el('path', { d: `M${x} ${y + ry}A${w / 2} ${ry} 0 0 1 ${x + w} ${y + ry}V${y + h - ry}A${w / 2} ${ry} 0 0 1 ${x} ${y + h - ry}Z`, class: 'wm-shape' }),
+        line(`M${x} ${y + ry}A${w / 2} ${ry} 0 0 0 ${x + w} ${y + ry}M${x} ${y + 2 * ry}A${w / 2} ${ry} 0 0 0 ${x + w} ${y + 2 * ry}`),
+      ];
+    }
+    case 'storage':
+      return [el('rect', { x, y, width: w, height: h, class: 'wm-shape' }), line(`M${x + 10} ${y}V${y + h}M${x} ${y + 10}H${x + w}`)];
+    case 'stored': {
+      const r = Math.min(14, w / 6);
+      return [el('path', { d: `M${x + r} ${y}H${x + w}A${r} ${h / 2} 0 0 0 ${x + w} ${y + h}H${x + r}A${r} ${h / 2} 0 0 1 ${x + r} ${y}Z`, class: 'wm-shape' })];
+    }
+    case 'documents': {
+      const a = Math.min(8, h * 0.15);
+      const page = (ox, oy) => el('path', { d: `M${x + ox} ${y + oy}H${x + ox + w - 8}` + docBottom(x + ox, y + oy, w - 8, h - 8, a), class: 'wm-shape' });
+      return [page(8, 0), page(4, 4), page(0, 8)];
+    }
+    case 'lined_doc': {
+      const a = Math.min(8, h * 0.15);
+      return [el('path', { d: `M${x} ${y}H${x + w}` + docBottom(x, y, w, h, a), class: 'wm-shape' }), line(`M${x + 8} ${y}V${y + h - a * 1.3}`)];
+    }
+    case 'tagged_doc': {
+      const a = Math.min(8, h * 0.15);
+      return [el('path', { d: `M${x} ${y}H${x + w}` + docBottom(x, y, w, h, a), class: 'wm-shape' }),
+        line(`M${x + w} ${y + h * 0.55}L${x + w * 0.8} ${y + h - a * 1.6}`)];
+    }
+    case 'card': {
+      const c = Math.min(12, h / 3);
+      return [el('polygon', { points: `${x + c},${y} ${x + w},${y} ${x + w},${y + h} ${x},${y + h} ${x},${y + c}`, class: 'wm-shape' })];
+    }
+    case 'tagged': {
+      const c = Math.min(12, h / 3);
+      return [el('rect', { x, y, width: w, height: h, class: 'wm-shape' }), line(`M${x + w - c} ${y + h}L${x + w} ${y + h - c}`)];
+    }
+    case 'divided':
+      return [el('rect', { x, y, width: w, height: h, class: 'wm-shape' }), line(`M${x} ${y + Math.min(16, h / 4)}H${x + w}`)];
+    case 'lined':
+      return [el('rect', { x, y, width: w, height: h, class: 'wm-shape' }), line(`M${x + 8} ${y}V${y + h}`)];
+    case 'display': {
+      const r = Math.min(14, w / 6);
+      return [el('path', { d: `M${x + r} ${y}H${x + w - r}A${r} ${h / 2} 0 0 1 ${x + w - r} ${y + h}H${x + r}L${x} ${cy}Z`, class: 'wm-shape' })];
+    }
+    case 'loop_limit': {
+      const c = Math.min(12, h / 3);
+      return [el('polygon', { points: `${x + c},${y} ${x + w - c},${y} ${x + w},${y + c} ${x + w},${y + h} ${x},${y + h} ${x},${y + c}`, class: 'wm-shape' })];
+    }
+    case 'collate':
+      return [el('polygon', { points: `${x},${y} ${x + w},${y} ${cx},${cy}`, class: 'wm-shape' }),
+        el('polygon', { points: `${cx},${cy} ${x + w},${y + h} ${x},${y + h}`, class: 'wm-shape' })];
+    case 'manual_file':
+      return [el('polygon', { points: `${x},${y} ${x + w},${y} ${cx},${y + h}`, class: 'wm-shape' })];
+    case 'manual_input': {
+      const sl = Math.min(14, h * 0.3);
+      return [el('polygon', { points: `${x},${y + sl} ${x + w},${y} ${x + w},${y + h} ${x},${y + h}`, class: 'wm-shape' })];
+    }
+    case 'stop':
+      return [el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape' }),
+        el('ellipse', { cx, cy, rx: w * 0.3, ry: h * 0.3, class: 'wm-shape wm-solid' })];
+    // A note: text with a curly brace beside it, no box.
+    case 'brace':
+      return [line(braceD(x + 7, y, h, -1))];
+    case 'brace_r':
+      return [line(braceD(x + w - 7, y, h, 1))];
+    case 'braces':
+      return [line(braceD(x + 7, y, h, -1) + braceD(x + w - 7, y, h, 1))];
+    // A communication link: a lightning bolt.
+    case 'bolt':
+      return [el('polygon', { points: `${x + w * 0.62},${y} ${x + w * 0.12},${y + h * 0.58} ${x + w * 0.47},${y + h * 0.55} ` +
+        `${x + w * 0.3},${y + h} ${x + w * 0.9},${y + h * 0.38} ${x + w * 0.53},${y + h * 0.42}`, class: 'wm-shape wm-solid' })];
     case 'text':
     case 'point':
       return [];
@@ -360,6 +538,39 @@ function outlineOf(n) {
       const ry = Math.min(12, h / 4);
       return arc(cx, y + ry, w / 2, ry, P, 2 * P).concat(arc(cx, y + h - ry, w / 2, ry, 0, P));
     }
+    case 'cloud': return cloudPoints(n);
+    case 'stop': return arc(cx, cy, w / 2, h / 2, 0, 2 * P, 48);
+    case 'person': {
+      const r = personHead(n);
+      return [{ x, y: y + 2 * r + 4 }].concat(arc(cx, y + r, r, r, P, 2 * P), [{ x: x + w, y: y + 2 * r + 4 }, { x: x + w, y: y + h }, { x, y: y + h }]);
+    }
+    case 'bucket': {
+      const r = Math.min(12, h / 4);
+      const t = w * 0.1;
+      return arc(cx, y + r, w / 2, r, P, 2 * P).concat(arc(cx, y + h - r, w / 2 - t, r, 0, P));
+    }
+    case 'disk': {
+      const ry = Math.min(12, h / 4);
+      return arc(cx, y + ry, w / 2, ry, P, 2 * P).concat(arc(cx, y + h - ry, w / 2, ry, 0, P));
+    }
+    case 'folder': return [{ x, y }, { x: x + w * 0.35, y }, { x: x + w * 0.35 + 8, y: y + 8 }, { x: x + w, y: y + 8 }, { x: x + w, y: y + h }, { x, y: y + h }];
+    case 'stored': {
+      const r = Math.min(14, w / 6);
+      return [{ x: x + r, y }].concat(arc(x + w, cy, r, h / 2, 3 * P / 2, P / 2), arc(x + r, cy, r, h / 2, P / 2, 3 * P / 2));
+    }
+    case 'display': {
+      const r = Math.min(14, w / 6);
+      return [{ x: x + r, y }].concat(arc(x + w - r, cy, r, h / 2, -P / 2, P / 2), [{ x: x + r, y: y + h }, { x, y: cy }]);
+    }
+    case 'card': { const c = Math.min(12, h / 3); return [{ x: x + c, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }, { x, y: y + c }]; }
+    case 'loop_limit': {
+      const c = Math.min(12, h / 3);
+      return [{ x: x + c, y }, { x: x + w - c, y }, { x: x + w, y: y + c }, { x: x + w, y: y + h }, { x, y: y + h }, { x, y: y + c }];
+    }
+    case 'collate': return [{ x, y }, { x: x + w, y }, { x: cx, y: cy }, { x: x + w, y: y + h }, { x, y: y + h }, { x: cx, y: cy }];
+    case 'manual_file': return [{ x, y }, { x: x + w, y }, { x: cx, y: y + h }];
+    case 'manual_input': { const sl = Math.min(14, h * 0.3); return [{ x, y: y + sl }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }]; }
+    case 'bolt': return [{ x: x + w * 0.62, y }, { x: x + w * 0.9, y: y + h * 0.38 }, { x: x + w * 0.3, y: y + h }, { x: x + w * 0.12, y: y + h * 0.58 }];
     case 'flag':
       return [{ x: x + w, y }, { x: x + w, y: y + h }].concat(Array.from({ length: 13 }, (_, k) => {
         const t = 1 - k / 12;

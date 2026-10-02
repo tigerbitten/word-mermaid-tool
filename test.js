@@ -77,7 +77,12 @@ const SAMPLES = [
   'flowchart TD\n  A([Start]) --> B[Enter]\n  B --> C{Valid?}\n  C -->|No| D[Error]\n  D --> B\n  C -->|Yes| E[Done]',
   'flowchart TB\n  subgraph Cloud\n    subgraph VPC\n      App --> DB[(DB)]\n    end\n  end\n  User --> Cloud',
   'flowchart LR\n  J1@{ shape: sm-circ } --> Q@{ shape: h-cyl, label: "FIFO" }\n  S@{ shape: cross-circ } --> J1',
+  'flowchart LR\n  U@{ shape: person, label: "User" } --> W@{ shape: cloud, label: "Internet" } --> D@{ shape: lin-cyl, label: "Disk" }\n  W --> X@{ shape: fr-circ }\n  N@{ shape: brace, label: "a note" }',
 ];
+d = parseMermaid('flowchart LR\n  A@{ shape: database } --> B@{ shape: comment, label: "x" } --> C@{ shape: stop } --> E@{ shape: directory, label: "f" }');
+check('Mermaid 11 aliases read as their shapes', d.nodes.map((n) => n.shape).join() === 'cylinder,brace,stop,folder', d.nodes.map((n) => n.shape));
+d = parseMermaid('flowchart LR\n  A@{ shape: cloud } --> B\n  A@{ label: "Net" }');
+check('a later @{ label } keeps the shape', d.nodes[0].shape === 'cloud' && d.nodes[0].label === 'Net', d.nodes[0]);
 for (const src of SAMPLES) {
   const out = toMermaid(parseMermaid(src));
   check('round trip: ' + src.split('\n')[1].trim(), toMermaid(parseMermaid(out)) === out, out);
