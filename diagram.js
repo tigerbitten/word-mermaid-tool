@@ -311,6 +311,9 @@ function readLook(decl) {
     if (key === 'color') set('color', cssColor(value));
     if (key === 'font-size') set('fontSize', parseFloat(value) || null);
     if (key === 'font-weight') set('bold', /bold|[6-9]00/.test(value));
+    if (key === 'font-style') set('italic', value === 'italic' || value === 'oblique');
+    if (key === 'text-decoration') set('underline', /underline/.test(value));
+    if (key === 'text-align' && /^(left|right)$/.test(value)) set('align', value);
   }
   return look;
 }
@@ -376,6 +379,9 @@ function styleDecl(n, d) {
   if (n.color && n.color !== base.color) parts.push('color:' + n.color);
   if (n.fontSize && n.fontSize !== (base.fontSize || DEFAULT_FONT_SIZE)) parts.push('font-size:' + n.fontSize + 'px');
   if (!!n.bold !== !!base.bold) parts.push('font-weight:' + (n.bold ? 'bold' : 'normal'));
+  if (!!n.italic !== !!base.italic) parts.push('font-style:' + (n.italic ? 'italic' : 'normal'));
+  if (!!n.underline !== !!base.underline) parts.push('text-decoration:' + (n.underline ? 'underline' : 'none'));
+  if ((n.align || null) !== (base.align || null)) parts.push('text-align:' + (n.align || 'center'));
   return parts.length ? 'style ' + n.id + ' ' + parts.join(',') : null;
 }
 
@@ -386,12 +392,14 @@ function linkStyleDecl(e, i) {
   if (e.color) parts.push('stroke:' + e.color, 'color:' + e.color);
   if (e.fontSize && e.fontSize !== DEFAULT_EDGE_FONT) parts.push('font-size:' + e.fontSize + 'px');
   if (e.bold) parts.push('font-weight:bold');
+  if (e.italic) parts.push('font-style:italic');
   return parts.length ? 'linkStyle ' + i + ' ' + parts.join(',') : null;
 }
 
+// A turned shape (a mux pointing right) adds its angle: Mermaid can't say it.
 function layoutLine(item) {
   return '%% ' + item.id + ' ' + Math.round(item.x) + ',' + Math.round(item.y) +
-    ' ' + Math.round(item.w) + 'x' + Math.round(item.h);
+    ' ' + Math.round(item.w) + 'x' + Math.round(item.h) + (item.rotate ? ' r' + item.rotate : '');
 }
 
 // Where an edge meets a block: which side, and how far along it. Only written
@@ -1145,11 +1153,12 @@ function parseMermaid(text) {
     const line = rawLine.trim();
     if (!line) continue;
 
-    const layoutMatch = line.match(/^%%\s+([\p{L}\p{N}_-]+)\s+(-?\d+),(-?\d+)\s+(\d+)x(\d+)\s*$/u);
+    const layoutMatch = line.match(/^%%\s+([\p{L}\p{N}_-]+)\s+(-?\d+),(-?\d+)\s+(\d+)x(\d+)(?:\s+r(90|180|270))?\s*$/u);
     if (layoutMatch) {
       layout[layoutMatch[1]] = {
         x: +layoutMatch[2], y: +layoutMatch[3], w: +layoutMatch[4], h: +layoutMatch[5],
       };
+      if (layoutMatch[6]) layout[layoutMatch[1]].rotate = +layoutMatch[6];
       continue;
     }
     const linkMatch = line.match(/^%%\s+link\s+(\d+)\s+([nesw][\d.]*|-)\s+([nesw][\d.]*|-)\s*$/);
@@ -1298,6 +1307,9 @@ function parseMermaid(text) {
     if (look.color) n.color = look.color;
     if (look.fontSize) n.fontSize = look.fontSize;
     if (look.bold) n.bold = true;
+    if (look.italic) n.italic = true;
+    if (look.underline) n.underline = true;
+    if (look.align) n.align = look.align;
     if (classOf[n.id]) n.classes = classOf[n.id].filter((c, k, all) => all.indexOf(c) === k);
   }
   d.edges.forEach((e, i) => {
@@ -1308,6 +1320,7 @@ function parseMermaid(text) {
     if (look.dash) e.dash = 'dotted';
     if (look.fontSize) e.fontSize = look.fontSize;
     if (look.bold) e.bold = true;
+    if (look.italic) e.italic = true;
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
     if (paths[i]) e.points = paths[i];
     if (routes[i]) e.route = routes[i];

@@ -119,6 +119,13 @@ out = toMermaid(d);
 check('pin names kept, and said for an LLM', d.edges[0].fromPort === 'rs 1' && d.edges[0].toPort === 'a' && d.edges[1].fromPort === 'out' &&
   /%% ports: RF\.rs 1 --> ALU\.a; ALU\.out --> WB/.test(out) && toMermaid(parseMermaid(out)) === out, out);
 
+d = parseMermaid('flowchart LR\n  A[x] --> M[/MUX\\]\n  style A color:#dc2626,font-style:italic,text-decoration:underline,text-align:left,stroke:#2563eb,stroke-width:2.5px,stroke-dasharray:5 4\n  linkStyle 0 font-style:italic\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% A 0,0 140x56\n%% M 200,0 60x100 r90');
+out = toMermaid(d);
+const a0 = d.nodes[0];
+check('text and border formatting read and written', a0.color === '#dc2626' && a0.italic && a0.underline && a0.align === 'left' && a0.stroke === '#2563eb' &&
+  a0.strokeWidth === 2.5 && a0.dash && d.edges[0].italic && toMermaid(parseMermaid(out)) === out && /font-style:italic/.test(out), out);
+check('a turned shape keeps its turn', d.nodes[1].rotate === 90 && /%% M 200,0 60x100 r90/.test(out), out);
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&

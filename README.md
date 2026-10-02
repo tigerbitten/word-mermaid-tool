@@ -18,8 +18,10 @@ Prototype. Word desktop on Windows and Mac.
   input, display, card, documents, stored data, loop limit, collate…). Drag
   one onto the canvas — a preview follows the pointer — or click one, then
   click where it goes.
-- **Select anything and a toolbar appears above it**, Miro-style: shape, fill,
-  text size, bold, grouping for blocks; line style, arrowheads, thickness,
+- **Select anything and a toolbar appears above it**, Miro-style: shape, fill
+  (any colour), border (colour, thickness, dashed), turn 90°, text size, bold,
+  italic, underline, text colour and alignment, grouping for blocks; a colour
+  for groups; line style, arrowheads, thickness,
   colour, label size, bold and reverse for connectors. **Right-click** for
   everything, including copy/paste style.
 - To rename a block: double-click it, press Enter or F2, or just select it and
@@ -107,7 +109,9 @@ Prototype. Word desktop on Windows and Mac.
 | `F2` / `Enter` / any letter | rename the selection |
 | `Ctrl+C` / `X` / `V` / `D` | copy, cut, paste, duplicate |
 | `Ctrl+A` | select all |
-| `Ctrl+B` | bold |
+| `Ctrl+B` / `I` / `U` | bold, italic, underline |
+| `Ctrl+]` / `Ctrl+[` | text a size bigger / smaller |
+| `Ctrl+L` / `E` / `R` | text left / centred / right |
 | `Ctrl+Alt+C` / `Ctrl+Alt+V` | copy style / paste style |
 | `Ctrl+G` / `Ctrl+Shift+G` | group / ungroup |
 | `Ctrl+Z` / `Ctrl+Y` | undo / redo |

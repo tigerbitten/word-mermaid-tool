@@ -806,14 +806,60 @@ function toggleBold() {
   applyToNodes((n) => { if (!LABELLESS.has(n.shape)) { n.bold = on; fitNodeSize(n); } });
 }
 
+// A quarter turn clockwise, about the block's centre: its box swaps sides.
+// Text stays upright. Not for text, icons or pictures, which don't turn.
+const TURNS = (n) => !['text', 'icon', 'image', 'point'].includes(n.shape);
+function turnSelection() {
+  if (!selectedNodes().some(TURNS)) return;
+  applyToNodes((n) => {
+    if (!TURNS(n)) return;
+    const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+    [n.w, n.h] = [n.h, n.w];
+    n.x = Math.round(cx - n.w / 2);
+    n.y = Math.round(cy - n.h / 2);
+    n.rotate = ((n.rotate || 0) + 90) % 360 || undefined;
+  });
+}
+
+// Word's text keys: Ctrl+] / Ctrl+[ a size up or down, Ctrl+L / E / R align.
+function stepFontSize(delta) {
+  if (selEdge >= 0 && model.edges[selEdge]) {
+    applyToEdge((e) => { e.fontSize = Math.max(8, Math.min(42, (e.fontSize || DEFAULT_EDGE_FONT) + delta)); });
+    return;
+  }
+  applyToNodes((n) => { if (!LABELLESS.has(n.shape)) { n.fontSize = Math.max(8, Math.min(42, (n.fontSize || DEFAULT_FONT_SIZE) + delta)); fitNodeSize(n); } });
+}
+
+function alignText(where) {
+  applyToNodes((n) => { if (!LABELLESS.has(n.shape)) n.align = where === 'center' ? undefined : where; });
+}
+
+// Ctrl+I / Ctrl+U and their buttons, the same way as bold.
+function toggleItalic() {
+  if (selEdge >= 0 && model.edges[selEdge]) { applyToEdge((e) => { e.italic = !e.italic; }); return; }
+  const nodes = selectedNodes().filter((n) => !LABELLESS.has(n.shape));
+  if (!nodes.length) return;
+  const on = nodes.some((n) => !n.italic);
+  applyToNodes((n) => { if (!LABELLESS.has(n.shape)) n.italic = on; });
+}
+
+function toggleUnderline() {
+  const nodes = selectedNodes().filter((n) => !LABELLESS.has(n.shape));
+  if (!nodes.length) return;
+  const on = nodes.some((n) => !n.underline);
+  applyToNodes((n) => { if (!LABELLESS.has(n.shape)) n.underline = on; });
+}
+
 // Miro's copy style / paste style: the look of one thing onto others, without
 // touching their text, shape or position.
 function copyStyle() {
   const e = selEdge >= 0 ? model.edges[selEdge] : null;
   const n = selectedNodes()[0];
-  if (e) styleClipboard = { kind: 'edge', dash: e.dash, head: e.head, width: e.width, color: e.color,
-                            fontSize: e.fontSize, bold: e.bold, route: e.route };
-  else if (n) styleClipboard = { kind: 'node', fill: n.fill, fontSize: n.fontSize, bold: n.bold };
+  if (e) styleClipboard = { kind: 'edge', dash: e.dash, head: e.head, mark: e.mark, width: e.width, color: e.color,
+                            fontSize: e.fontSize, bold: e.bold, italic: e.italic, route: e.route };
+  else if (n) styleClipboard = { kind: 'node', fill: n.fill, stroke: n.stroke, strokeWidth: n.strokeWidth, dash: n.dash,
+                                 color: n.color, fontSize: n.fontSize, bold: n.bold, italic: n.italic,
+                                 underline: n.underline, align: n.align };
   else return false;
   return true;
 }
@@ -1970,6 +2016,10 @@ function onKeyDown(ev) {
   else if (ctrl && k === 'd') { eat(); duplicateSelection(); }
   else if (ctrl && k === 'a') { eat(); selectAll(); }
   else if (ctrl && k === 'b') { eat(); toggleBold(); }
+  else if (ctrl && k === 'i') { eat(); toggleItalic(); }
+  else if (ctrl && k === 'u') { eat(); toggleUnderline(); }
+  else if (ctrl && (k === ']' || k === '[')) { eat(); stepFontSize(k === ']' ? 1 : -1); }
+  else if (ctrl && !ev.shiftKey && (k === 'l' || k === 'e' || k === 'r')) { eat(); alignText({ l: 'left', e: 'center', r: 'right' }[k]); }
   else if (ctrl && k === 'g') { eat(); ev.shiftKey ? ungroupSelection() : groupSelection(); }
   else if (ctrl && k === 'z') { eat(); ev.shiftKey ? redo() : undo(); }
   else if (ctrl && k === 'y') { eat(); redo(); }

@@ -81,7 +81,32 @@ function wrapLabel(label, maxWidth, size, bold) {
 
 // The part of a shape the label actually sits in. Most shapes centre it in
 // their box; the ones whose outline eats into the box shift it clear.
+// A shape turned by 90/180/270 degrees is drawn as its unturned self in the
+// box it turns into: same centre, sides swapped for a quarter turn.
+function unturned(n) {
+  const quarter = n.rotate === 90 || n.rotate === 270;
+  return Object.assign({}, n, quarter ? { x: n.x + n.w / 2 - n.h / 2, y: n.y + n.h / 2 - n.w / 2, w: n.h, h: n.w } : {}, { rotate: 0 });
+}
+
+// A point of the unturned shape, turned into place about the centre.
+function turnPoint(n, p) {
+  const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+  const dx = p.x - cx, dy = p.y - cy;
+  if (n.rotate === 90) return { x: cx - dy, y: cy + dx };
+  if (n.rotate === 180) return { x: cx - dx, y: cy - dy };
+  if (n.rotate === 270) return { x: cx + dy, y: cy - dx };
+  return p;
+}
+
 function labelArea(n) {
+  if (n.rotate) {
+    // The unturned text area, turned, as the box it then covers. The text
+    // itself is never turned.
+    const a = labelArea(unturned(n));
+    const corners = [turnPoint(n, a), turnPoint(n, { x: a.x + a.w, y: a.y + a.h })];
+    const x = Math.min(corners[0].x, corners[1].x), y = Math.min(corners[0].y, corners[1].y);
+    return { x, y, w: Math.abs(corners[0].x - corners[1].x), h: Math.abs(corners[0].y - corners[1].y) };
+  }
   const { x, y, w, h } = n;
   if (n.shape === 'cylinder') { const r = Math.min(12, h / 4); return { x, y: y + r, w, h: h - r }; }
   if (n.shape === 'document') { const a = Math.min(8, h * 0.15); return { x, y, w, h: h - a }; }
@@ -534,7 +559,10 @@ function labelText(parent, lines, cx, cy, size, bold, cls, defaultSize) {
 function drawNode(parent, n) {
   const g = el('g', { 'data-id': n.id, 'data-kind': 'node' }, parent);
   const solid = /wm-solid/;
-  for (const shape of shapeElement(n)) {
+  // A turned shape: drawn unturned, in a group turned about the centre.
+  let shapeParent = g;
+  if (n.rotate) shapeParent = el('g', { transform: `rotate(${n.rotate} ${n.x + n.w / 2} ${n.y + n.h / 2})` }, g);
+  for (const shape of shapeElement(n.rotate ? unturned(n) : n)) {
     if (shape.getAttribute('data-line')) shape.style.fill = 'none';
     else if (n.fill && n.fill !== '#ffffff' && !solid.test(shape.getAttribute('class'))) shape.style.fill = n.fill;
     // Border colour, width and dashes from the Mermaid style, where it set them.
@@ -544,14 +572,20 @@ function drawNode(parent, n) {
       if (n.dash) shape.style.strokeDasharray = '5 4';
     }
     if (n.stroke && solid.test(shape.getAttribute('class'))) shape.style.fill = n.stroke;
-    g.appendChild(shape);
+    shapeParent.appendChild(shape);
   }
   if (LABELLESS.has(n.shape)) return g;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
   const area = labelArea(n);
   const lines = wrapLabel(shownLabel(n), area.w - LABEL_PAD_X * 2, size, n.bold);
-  const text = labelText(g, lines, area.x + area.w / 2, area.y + area.h / 2, size, n.bold, 'wm-label', DEFAULT_FONT_SIZE);
+  // Left or right aligned text runs from that side of the text area.
+  const x = n.align === 'left' ? area.x + LABEL_PAD_X : n.align === 'right' ? area.x + area.w - LABEL_PAD_X : area.x + area.w / 2;
+  const text = labelText(g, lines, x, area.y + area.h / 2, size, n.bold, 'wm-label', DEFAULT_FONT_SIZE);
+  // Inline style, not an attribute: the class rule would win over an attribute.
+  if (n.align) text.style.textAnchor = n.align === 'left' ? 'start' : 'end';
   if (n.color) text.style.fill = n.color;
+  if (n.italic) text.style.fontStyle = 'italic';
+  if (n.underline) text.style.textDecoration = 'underline';
   return g;
 }
 
@@ -603,6 +637,7 @@ function facingSide(a, b) {
 // this, not on the bounding box: an arrow that stops in the air beside a mux's
 // slanted side, or a cylinder's curved top, looks like it missed.
 function outlineOf(n) {
+  if (n.rotate) return outlineOf(unturned(n)).map((p) => turnPoint(n, p));
   const { x, y, w, h } = n;
   const cx = x + w / 2;
   const cy = y + h / 2;
@@ -1419,6 +1454,7 @@ function drawEdge(parent, e, pts, index, box, pinLayer) {
     el('rect', { x: box.x, y: box.y, width: box.w, height: box.h, class: 'wm-edge-label-bg' }, g);
     const text = labelText(g, box.lines, box.mid.x, box.mid.y, box.size, e.bold, 'wm-edge-label', DEFAULT_EDGE_FONT);
     if (e.color) text.style.fill = e.color;
+    if (e.italic) text.style.fontStyle = 'italic';
   }
   return g;
 }
@@ -1598,7 +1634,12 @@ function svgForWord(d) {
   }
   // Set on the element itself (a block's fill, a bigger label), so it wins over the class.
   for (const node of svg.querySelectorAll('[style]')) {
-    for (let i = 0; i < node.style.length; i++) node.setAttribute(node.style[i], node.style.getPropertyValue(node.style[i]));
+    for (let i = 0; i < node.style.length; i++) {
+      const prop = node.style[i];
+      // The browser expands text-decoration into longhands Word doesn't read.
+      if (prop.startsWith('text-decoration')) { if (prop === 'text-decoration-line') node.setAttribute('text-decoration', node.style.getPropertyValue(prop)); continue; }
+      node.setAttribute(prop, node.style.getPropertyValue(prop));
+    }
     node.removeAttribute('style');
   }
   for (const text of svg.querySelectorAll('text[dominant-baseline]')) {
