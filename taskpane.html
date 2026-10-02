@@ -851,6 +851,7 @@
       try {
         let outcome = null;
         let vectorRefused = null;
+        let sizeNote = '';
         await Word.run(async (context) => {
           let target = null;
           let tag;
@@ -871,6 +872,11 @@
             outcome = 'inserted';
           }
           const png = await renderPng(d, widthPt);
+          // Fitted to the page, a big diagram's text can end up small; say how
+          // small. (A picture sized by hand in Word is the user's call.)
+          const fit = pictureSize(d).fit;
+          if (!widthPt && fit < 0.8) sizeNote = ` -- shrunk to ${Math.round(fit * 100)}% to fit the page, so text is about ` +
+            `${Math.round(11 * fit)}pt; a landscape page or a split diagram would read better`;
           console.log('picture', png.widthPt.toFixed(0) + 'x' + png.heightPt.toFixed(0) + 'pt', widthPt ? '(kept its scale)' : '');
 
           // A diagram gets its own centred paragraph rather than landing
@@ -915,7 +921,7 @@
         } else if (vectorRefused) {
           setStatus('Word refused the vector picture (' + vectorRefused + '), so it went in as a PNG', 'error');
         } else {
-          setStatus(outcome === 'updated' ? 'updated in the document' : 'inserted -- keep editing and press Update to refresh it', 'success');
+          setStatus((outcome === 'updated' ? 'updated in the document' : 'inserted -- keep editing and press Update to refresh it') + sizeNote, 'success');
         }
       } catch (e) {
         setStatus('insert failed: ' + describeError(e), 'error');

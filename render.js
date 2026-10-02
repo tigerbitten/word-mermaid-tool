@@ -991,6 +991,9 @@ const CANVAS_MAX_PIXELS = 16.7e6;
 // smaller, fussier-looking diagram than the document it sits in.
 const PX_TO_PT = 11 / DEFAULT_FONT_SIZE;
 const MAX_DOC_WIDTH_PT = 468;    // 6.5in: US Letter minus one-inch margins
+// 8.5in: the 9in of text height on that page, less a line for a caption.
+// Taller and the picture runs off the bottom of the page.
+const MAX_DOC_HEIGHT_PT = 612;
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -1045,13 +1048,13 @@ function toBase64(bytes) {
 }
 
 // The size a diagram is placed at in Word, in points: default-size text lands
-// at 11pt, and nothing is wider than the text column.
+// at 11pt, and nothing is wider than the text column or taller than the page.
 function pictureSize(d) {
   const b = diagramBounds(d);
   let w = Math.ceil(b.w + EXPORT_PAD * 2) * PX_TO_PT;
   let h = Math.ceil(b.h + EXPORT_PAD * 2) * PX_TO_PT;
-  if (w > MAX_DOC_WIDTH_PT) { h *= MAX_DOC_WIDTH_PT / w; w = MAX_DOC_WIDTH_PT; }
-  return { w, h };
+  const fit = Math.min(1, MAX_DOC_WIDTH_PT / w, MAX_DOC_HEIGHT_PT / h);
+  return { w: w * fit, h: h * fit, fit };
 }
 
 // The SVG Word gets for a vector picture. Word draws SVG with its own
