@@ -88,7 +88,9 @@ let panFrame = 0;
 let pressAt = { x: 0, y: 0 }; // screen point of the last press on the canvas
 const EDGE_PAN = 28;      // screen px from the canvas edge where a drag starts scrolling the view
 
-const snap = (v) => Math.round(v / GRID) * GRID;
+// Placement is free, as in Miro: positions only round to whole pixels. What
+// lines things up is the guides (alignGuides), not a grid.
+const snap = (v) => Math.round(v);
 
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
@@ -260,7 +262,7 @@ function drawChrome() {
   }
 
   if (selEdge >= 0 && model.edges[selEdge]) drawEdgeChrome(s);
-  if (drag && drag.mode === 'move') drawGuides(s);
+  if (drag && (drag.mode === 'move' || drag.mode === 'resize')) drawGuides(s);
 
   if (ghost) drawGhost(ghost.shape, ghost.p);
 
@@ -543,11 +545,8 @@ function takenIds() {
 function makeNode(shape, c) {
   const label = LABELLESS.has(shape) ? '' : shape === 'text' ? 'Text' : 'Block';
   const [w, h] = defaultSize(shape);
-  // Wiring symbols snap by their centre, so a junction dot sits exactly on the
-  // grid line a wire runs along; text blocks snap by their corner as usual.
-  const wire = LABELLESS.has(shape);
-  const x = wire ? snap(c.x) - w / 2 : snap(c.x - w / 2);
-  const y = wire ? snap(c.y) - h / 2 : snap(c.y - h / 2);
+  const x = snap(c.x - w / 2);
+  const y = snap(c.y - h / 2);
   const n = { id: makeId(label || shape, takenIds()), label, shape, x, y,
               w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: false };
   fitNodeSize(n);
@@ -926,9 +925,8 @@ function pasteClipboard(dx, dy) {
     n.id = makeId(n.label || n.shape, taken);
     taken.add(n.id);
     remap[source.id] = n.id;
-    // Loose line ends keep their exact offset; blocks land on the grid.
-    n.x = isPoint(n) ? n.x + snap(dx) : snap(n.x + dx);
-    n.y = isPoint(n) ? n.y + snap(dy) : snap(n.y + dy);
+    n.x = n.x + snap(dx);
+    n.y = n.y + snap(dy);
     model.nodes.push(n);
     made.push(n.id);
   }
@@ -948,9 +946,8 @@ function pasteClipboard(dx, dy) {
     const copy = JSON.parse(JSON.stringify(e));
     copy.from = remap[e.from];
     copy.to = remap[e.to];
-    // Shifted by exactly what the blocks moved (blocks sit on the grid, so
-    // that's the snapped offset) and not snapped individually: bends lined
-    // up with a port are usually off-grid, and snapping them puts a kink in.
+    // Shifted by exactly what the blocks moved, so bends stay lined up with
+    // the ports they were drawn against.
     if (copy.points) copy.points = copy.points.map((q) => ({ x: q.x + snap(dx), y: q.y + snap(dy) }));
     model.edges.push(copy);
   }
@@ -1148,18 +1145,19 @@ function legCursor(p) {
   return Math.abs(route.raw[k].y - route.raw[k + 1].y) < 0.5 ? 'ns-resize' : 'ew-resize';
 }
 
-// Smart guides, PowerPoint/Miro-style: while dragging, the moving blocks snap
-// to line up with any other block -- left, centre or right edges, top, middle
-// or bottom -- within a few screen pixels, and a guide line shows what they
-// lined up with. Lining up with the block next door is nearly always what you
-// were aiming for, so it wins over the grid on that axis.
+// Smart guides, PowerPoint/Miro-style: while dragging, the moving blocks
+// line up with any other block -- left, centre or right edges, top, middle or
+// bottom -- or space themselves evenly with their neighbours, once within a
+// few screen pixels; a guide shows what they lined up with. Nothing else pulls:
+// placement is otherwise free.
 function alignGuides(dx, dy, lockX, lockY) {
   const b0 = drag.bounds;
   const moving = new Set(drag.nodes.map((n) => n.id));
-  const others = model.nodes.filter((n) => !moving.has(n.id));
+  const others = model.nodes.filter((n) => !moving.has(n.id) && !isPoint(n));
   const tol = 6 / view.zoom;
   const guides = [];
-  const along = (key, size, d, locked) => {
+  const box = { x: b0.x + dx, y: b0.y + dy, w: b0.w, h: b0.h };
+  const along = (key, size, cross, crossSize, d, locked) => {
     if (locked || !others.length) return null;
     let best = null;
     for (const f of [0, 0.5, 1]) {
@@ -1168,19 +1166,95 @@ function alignGuides(dx, dy, lockX, lockY) {
         for (const g of [0, 0.5, 1]) {
           const v = o[key] + o[size] * g;
           const off = v - mine;
-          if (Math.abs(off) <= tol && (!best || Math.abs(off) < Math.abs(best.off))) best = { off, v, o };
+          if (Math.abs(off) <= tol && (!best || Math.abs(off) < Math.abs(best.off))) best = { off, guide: { axis: key, v, o } };
         }
       }
     }
-    if (best) guides.push({ axis: key, v: best.v, o: best.o });
+    // Even spacing, with the blocks beside it in the same row (or column).
+    const row = others.filter((o) => o[cross] < box[cross] + box[crossSize] && box[cross] < o[cross] + o[crossSize])
+      .sort((p, q) => p[key] - q[key]);
+    const at = b0[key] + d;
+    const end = (o) => o[key] + o[size];
+    // Drawn just past the blocks, clear of any connector between them.
+    const lane = Math.max(box[cross] + box[crossSize], ...row.map((o) => o[cross] + o[crossSize])) + 10 / view.zoom;
+    const offer = (pos, gaps) => {
+      const off = pos - at;
+      if (Math.abs(off) <= tol && (!best || Math.abs(off) < Math.abs(best.off))) best = { off, guide: { axis: key, gaps, lane } };
+    };
+    for (let i = 0; i + 1 < row.length; i++) {
+      const p = row[i], q = row[i + 1];
+      const gap = q[key] - end(p);
+      if (gap <= 0) continue;
+      // After the pair, or before it, by the pair's own gap.
+      offer(end(q) + gap, [[end(p), q[key]], [end(q), end(q) + gap]]);
+      offer(p[key] - gap - b0[size], [[p[key] - gap, p[key]], [end(p), q[key]]]);
+    }
+    // Midway between the neighbours either side.
+    const left = row.filter((o) => end(o) <= at + tol).pop();
+    const right = row.find((o) => o[key] >= at + b0[size] - tol);
+    if (left && right) {
+      const pos = (end(left) + right[key] - b0[size]) / 2;
+      if (pos > end(left)) offer(pos, [[end(left), pos], [pos + b0[size], right[key]]]);
+    }
+    if (best) guides.push(best.guide);
     return best ? d + best.off : null;
   };
-  return { gx: along('x', 'w', dx, lockX), gy: along('y', 'h', dy, lockY), guides };
+  return { gx: along('x', 'w', 'y', 'h', dx, lockX), gy: along('y', 'h', 'x', 'w', dy, lockY), guides };
+}
+
+// The same, for the sides a resize handle drags: an edge lines up with
+// another block's edge or centre, or the block takes another's width/height.
+function resizeGuides(n, b0, corner, w, h) {
+  const others = model.nodes.filter((o) => o !== n && !isPoint(o));
+  const tol = 6 / view.zoom;
+  const guides = [];
+  const fit = (key, size, side, value) => {
+    // `side` 1 drags the far edge (e/s), -1 the near one (w/n).
+    let best = null;
+    const edge = side > 0 ? b0[key] + value : b0[key] + b0[size] - value;
+    for (const o of others) {
+      for (const v of [o[key], o[key] + o[size] / 2, o[key] + o[size]]) {
+        const off = v - edge;
+        if (Math.abs(off) <= tol && (!best || Math.abs(off) < Math.abs(best.off))) best = { off, guide: { axis: key, v, o } };
+      }
+      const off = o[size] - value;
+      if (Math.abs(off) <= tol && (!best || Math.abs(off) < Math.abs(best.off))) best = { off: side * off, guide: { axis: key, same: o, size } };
+    }
+    if (!best) return value;
+    guides.push(best.guide);
+    return value + side * best.off;
+  };
+  if (corner.includes('e')) w = fit('x', 'w', 1, w);
+  if (corner.includes('w')) w = fit('x', 'w', -1, w);
+  if (corner.includes('s')) h = fit('y', 'h', 1, h);
+  if (corner.includes('n')) h = fit('y', 'h', -1, h);
+  return { w: Math.round(w), h: Math.round(h), guides };
 }
 
 function drawGuides(s) {
-  const b = boundsOf(drag.nodes);
+  const b = drag.mode === 'resize' ? drag.node : boundsOf(drag.nodes);
+  const tick = 4 * s;
   for (const g of drag.guides || []) {
+    if (g.gaps) {
+      // Equal spacing: each matching gap drawn as a short bar with end ticks.
+      for (const [p, q] of g.gaps) {
+        const d = g.axis === 'x'
+          ? `M${p} ${g.lane}H${q}M${p} ${g.lane - tick}V${g.lane + tick}M${q} ${g.lane - tick}V${g.lane + tick}`
+          : `M${g.lane} ${p}V${q}M${g.lane - tick} ${p}H${g.lane + tick}M${g.lane - tick} ${q}H${g.lane + tick}`;
+        el('path', { d, class: 'wm-guide', 'stroke-width': 1 * s }, chrome);
+      }
+      continue;
+    }
+    if (g.same) {
+      // Same size as another block: both sides marked.
+      for (const r of [b, g.same]) {
+        const d = g.size === 'w'
+          ? `M${r.x} ${r.y - 8 * s}H${r.x + r.w}M${r.x} ${r.y - 8 * s - tick}v${2 * tick}M${r.x + r.w} ${r.y - 8 * s - tick}v${2 * tick}`
+          : `M${r.x - 8 * s} ${r.y}V${r.y + r.h}M${r.x - 8 * s - tick} ${r.y}h${2 * tick}M${r.x - 8 * s - tick} ${r.y + r.h}h${2 * tick}`;
+        el('path', { d, class: 'wm-guide', 'stroke-width': 1 * s }, chrome);
+      }
+      continue;
+    }
     const o = g.o;
     const d = g.axis === 'x'
       ? `M${g.v} ${Math.min(b.y, o.y) - 12}V${Math.max(b.y + b.h, o.y + o.h) + 12}`
@@ -1463,15 +1537,16 @@ function onPointerMove(ev) {
     let lockX = false;
     let lockY = false;
     if (ev.shiftKey) { if (Math.abs(rx) > Math.abs(ry)) { ry = 0; lockY = true; } else { rx = 0; lockX = true; } }
-    const { gx, gy, guides } = alignGuides(snap(rx), snap(ry), lockX, lockY);
+    // Alt turns the guides off, for placing something just off a line.
+    const { gx, gy, guides } = ev.altKey ? { guides: [] } : alignGuides(rx, ry, lockX, lockY);
     drag.guides = guides;
-    // A guided axis moves by exactly the aligning amount; an unguided one
-    // snaps to the grid as before.
+    // A guided axis moves by exactly the aligning amount; the other follows
+    // the pointer.
     const dx = gx != null ? gx : snap(rx);
     const dy = gy != null ? gy : snap(ry);
     for (const b of drag.boxes) {
-      b.n.x = gx != null ? b.x + dx : snap(b.x + dx);
-      b.n.y = gy != null ? b.y + dy : snap(b.y + dy);
+      b.n.x = b.x + dx;
+      b.n.y = b.y + dy;
     }
     for (const r of drag.riders) r.e.points = r.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
     for (const [g, members] of drag.members) g.members = members.slice();
@@ -1520,13 +1595,16 @@ function onPointerMove(ev) {
       w = Math.round(b.w * k);
       h = Math.round(b.h * k);
     } else {
-      // Only the sides this handle actually drags get snapped -- snapping the
-      // other one too would make widening a 56px-tall block also change its
-      // height to 60. Wiring symbols aren't snapped at all; a 10px grid is
-      // coarser than the symbol.
-      const s = wire ? Math.round : snap;
-      if (c.includes('e') || c.includes('w')) w = Math.max(minW, s(w));
-      if (c.includes('n') || c.includes('s')) h = Math.max(minH, s(h));
+      if (c.includes('e') || c.includes('w')) w = Math.max(minW, Math.round(w));
+      if (c.includes('n') || c.includes('s')) h = Math.max(minH, Math.round(h));
+      // The dragged sides line up with other blocks' edges, or the size with
+      // another block's, when within a few pixels -- shown by a guide.
+      if (!ev.altKey) {
+        const fit = resizeGuides(drag.node, b, c, w, h);
+        w = Math.max(minW, fit.w);
+        h = Math.max(minH, fit.h);
+        drag.guides = fit.guides;
+      }
     }
     drag.node.w = w;
     drag.node.h = h;
