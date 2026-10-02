@@ -44,6 +44,13 @@ let refused = '';
 try { parseMermaid('sequenceDiagram\n  A->>B: hi'); } catch (e) { refused = e.message; }
 check('another diagram type is named when refused', /sequenceDiagram/.test(refused), refused);
 
+d = parseMermaid('flowchart TB\n  LB --> Svc\n  subgraph Svc[Services]\n    direction LR\n    A ~~~ B ~~~ C\n  end\n  Svc --> DB');
+const at = (id) => d.nodes.find((n) => n.id === id);
+check('invisible links keep their blocks and draw nothing', ids(d) === 'LB,A,B,C,DB' && edges(d) === 'LB>Svc Svc>DB', [ids(d), edges(d)]);
+check("a subgraph's own direction lays it out (a row in a top-down diagram)", at('A').y === at('B').y && at('B').y === at('C').y && at('A').x < at('B').x,
+  d.nodes.map((n) => [n.id, n.x, n.y]));
+check('a subgraph direction is written back', /subgraph Svc\["Services"\]\n    direction LR/.test(toMermaid(d)), toMermaid(d));
+
 // Groups.
 d = parseMermaid('flowchart TB\n  subgraph Outer\n    subgraph Inner\n      A --> B\n    end\n    C\n  end\n  D --> Inner');
 const g = (id) => d.groups.find((x) => x.id === id);

@@ -329,6 +329,7 @@ function toMermaid(d) {
       order.push(it);
       if (!it.members) { lines.push(pad + nodeDecl(it)); continue; }
       lines.push(pad + 'subgraph ' + it.id + '[' + quoteLabel(it.label) + ']');
+      if (it.direction) lines.push(pad + '  direction ' + it.direction);
       declare(it.members.map((id) => nodeById(d, id)).filter(Boolean)
         .concat(childGroups(d, it).filter(hasBlocks)), pad + '  ');
       lines.push(pad + 'end');
@@ -437,7 +438,9 @@ const BRACKETS = [
 // same as `A --> B` but asks dagre for a longer edge, and LLMs emit both.
 // A label between pipes may be quoted, and a quoted one may contain a pipe of
 // its own (`-->|"a|b"|`), so the quoted form is matched first.
-const LINK_RE = /^\s*(<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/;
+// `~~~` is Mermaid's invisible link, there only to line blocks up: its
+// blocks are kept, and it draws nothing.
+const LINK_RE = /^\s*(~{3,}|<-\.-+>|-\.-+>|-\.-+|<=+>|<-{2,}>|=+>|={2,}|<-{2,}|--o|--x|-{2,}>|-{2,})\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/;
 
 function linkFromToken(token) {
   return {
@@ -581,6 +584,7 @@ function parseMermaid(text) {
   const styles = {};
   let groupStack = [];
   let sawHeader = false;
+  const invisible = [];   // `A ~~~ B`: [from, to], for the layout only
 
   const ensureNode = (ref) => {
     let n = nodeById(d, ref.id);
@@ -676,7 +680,13 @@ function parseMermaid(text) {
       continue;
     }
 
-    if (/^(direction|classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
+    // Inside a subgraph, `direction LR` lays that group out its own way.
+    const dirLine = line.match(/^direction\s+(TB|TD|BT|LR|RL)\b/i);
+    if (dirLine) {
+      if (groupStack.length) groupStack[groupStack.length - 1].direction = dirLine[1].toUpperCase().replace('TB', 'TD');
+      continue;
+    }
+    if (/^(classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
 
     // Anything left is a node declaration or a chain of edges, where either
     // side of a link may be an `A & B` list: every pairing becomes an edge.
@@ -693,6 +703,11 @@ function parseMermaid(text) {
       if (!next) break;
       i = next.next;
       const targets = next.refs.map(ensureNode);
+      if (link[1].startsWith('~')) {
+        for (const a of prev) for (const b of targets) invisible.push([a.id, b.id]);
+        prev = targets;
+        continue;
+      }
       for (const a of prev) {
         for (const b of targets) {
           const e = Object.assign(newEdge(a.id, b.id), linkFromToken(link[1]));
@@ -764,7 +779,7 @@ function parseMermaid(text) {
     g.members.forEach((id) => claimed.add(id));
   }
 
-  applyLayout(d, layout);
+  applyLayout(d, layout, invisible);
 
   // A zero-size empty text node is a loose line end (see SHAPES.point). An
   // ordinary text label never has zero size, so this can't catch one.
@@ -777,7 +792,7 @@ function parseMermaid(text) {
 // Anything the `%%` lines didn't place gets an automatic spot. Pasted-in
 // Mermaid (no `%%` lines at all) is laid out whole, group by group; a few
 // blocks added to a drawn diagram by editing the text go in rows below it.
-function applyLayout(d, layout) {
+function applyLayout(d, layout, invisible) {
   const unplaced = [];
   for (const n of d.nodes) {
     const l = layout[n.id];
@@ -788,7 +803,8 @@ function applyLayout(d, layout) {
   if (typeof sizeForLabel === 'function') unplaced.forEach(sizeForLabel);
   if (unplaced.length === d.nodes.length) {
     const grouped = new Set(d.groups.flatMap((g) => g.members));
-    layoutBlock(d, d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40);
+    const links = d.edges.map((e) => [e.from, e.to]).concat(invisible);
+    layoutBlock(d, d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40, d.direction, links);
   } else if (unplaced.length) {
     const placed = d.nodes.filter((n) => !unplaced.includes(n));
     const bottom = Math.max(...placed.map((n) => n.y + n.h)) + 60;
@@ -872,17 +888,20 @@ function layerItems(items, pairs) {
 // direction, the way the connectors between them run, with its top-left at
 // x0,y0; a group's own contents are laid out first, inside it. Each layer is
 // centred across the flow. Returns the size taken.
-function layoutBlock(d, items, x0, y0) {
+// `links` are [from, to] ids: the connectors, and invisible `~~~` links,
+// which order blocks just the same.
+function layoutBlock(d, items, x0, y0, direction, links) {
   // In the order written: a group where its first block was written.
   const written = (it) => Math.min(...(it.members ? groupNodeIds(d, it) : [it.id]).map((id) => d.nodes.findIndex((m) => m.id === id)));
   items = items.slice().sort((p, q) => written(p) - written(q));
-  const across = d.direction === 'LR' || d.direction === 'RL';
+  const across = direction === 'LR' || direction === 'RL';
   const GAP_ALONG = across ? 80 : 60;
   const GAP_ACROSS = across ? 40 : 60;
   const sizes = new Map();
   for (const it of items) {
     if (!it.members) { sizes.set(it, { w: it.w, h: it.h }); continue; }
-    const inner = layoutBlock(d, it.members.map((id) => nodeById(d, id)).filter(Boolean).concat(childGroups(d, it)), 0, 0);
+    const inner = layoutBlock(d, it.members.map((id) => nodeById(d, id)).filter(Boolean).concat(childGroups(d, it)), 0, 0,
+      it.direction || direction, links);
     sizes.set(it, { w: Math.max(inner.w, groupTabWidthEstimate(it)) + GROUP_PAD * 2, h: inner.h + GROUP_PAD * 2 + groupTitleH(it) });
   }
   // Which item each block or group id sits in, so a connector between two
@@ -894,9 +913,9 @@ function layoutBlock(d, items, x0, y0) {
     for (const id of groupNodeIds(d, it)) home.set(id, i);
     for (const g of d.groups) for (let p = g; p; p = groupById(d, p.parent)) if (p === it) home.set(g.id, i);
   });
-  const pairs = d.edges.filter((e) => home.has(e.from) && home.has(e.to)).map((e) => [home.get(e.from), home.get(e.to)]);
+  const pairs = links.filter(([a, b]) => home.has(a) && home.has(b)).map(([a, b]) => [home.get(a), home.get(b)]);
   const layers = layerItems(items, pairs);
-  if (d.direction === 'RL' || d.direction === 'BT') layers.reverse();
+  if (direction === 'RL' || direction === 'BT') layers.reverse();
 
   const span = (layer) => layer.reduce((sum, it) => sum + (across ? sizes.get(it).h : sizes.get(it).w), 0) + GAP_ACROSS * (layer.length - 1);
   const widest = Math.max(0, ...layers.map(span));

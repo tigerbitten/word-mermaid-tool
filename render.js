@@ -610,6 +610,18 @@ function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
   return best ? best.c : [{ x: b0.x, y: a0.y }];
 }
 
+// What the best right-angle route between these two sides would cost, for
+// choosing sides; Infinity if there's none.
+function sideCost(A, sa, B, sb, blocks) {
+  const p0 = anchorPoint(A, sa, 0.5);
+  const p1 = anchorPoint(B, sb, 0.5);
+  const a0 = stubOf(A, p0, sa);
+  const b0 = stubOf(B, p1, sb);
+  const pts = simplify(joinOrthogonal([p0, a0].concat(routeBends(p0, sa, a0, A, p1, sb, b0, B, blocks, []), [b0, p1])));
+  const cost = routeCost(pts, sa, A, sb, B);
+  return cost == null ? Infinity : cost + clutterCost(pts, blocks.filter((n) => n !== A && n !== B), []);
+}
+
 // Joins points with right angles, adding a corner wherever two neighbours
 // differ in both x and y. A hand-edited path only stores its bends, so when a
 // block moves afterwards this is what keeps the connector square: the stub
@@ -674,10 +686,28 @@ function edgeRoutes(d) {
     if (e.route === 'straight') return { a, b, straight: true, fa: e.fromAnchor, ta: e.toAnchor };
     const fa = e.fromAnchor || {};
     const ta = e.toAnchor || {};
+    let fromSide = fa.side || exitSide(a, b);
+    let toSide = ta.side || facingSide(b, a);
+    // Diagonal neighbours (apart on both axes) could be joined from either of
+    // two sides at each end; the facing one isn't always the clean one -- it
+    // can send the line across a group border or another connector's path.
+    // Each pairing is tried and the cheapest route's sides kept.
+    const apart = (p, q, pos, len) => p[pos] + p[len] <= q[pos] || q[pos] + q[len] <= p[pos];
+    if (!fa.side && !ta.side && a.shape !== 'diamond' && apart(a, b, 'x', 'w') && apart(a, b, 'y', 'h')) {
+      const ca = centerOf(a);
+      const cb = centerOf(b);
+      const h = (from, to) => (to.x > from.x ? 'e' : 'w');
+      const v = (from, to) => (to.y > from.y ? 's' : 'n');
+      let best = Infinity;
+      for (const [sa, sb] of [[fromSide, toSide], [h(ca, cb), v(cb, ca)], [v(ca, cb), h(cb, ca)], [h(ca, cb), h(cb, ca)], [v(ca, cb), v(cb, ca)]]) {
+        const cost = sideCost(a, sa, b, sb, blocks);
+        if (cost < best - 1) { best = cost; fromSide = sa; toSide = sb; }
+      }
+    }
     return {
       a, b,
-      from: { side: fa.side || exitSide(a, b), t: fa.t, other: b, pinned: fa.t != null },
-      to: { side: ta.side || facingSide(b, a), t: ta.t, other: a, pinned: ta.t != null },
+      from: { side: fromSide, t: fa.t, other: b, pinned: fa.t != null },
+      to: { side: toSide, t: ta.t, other: a, pinned: ta.t != null },
     };
   });
 
