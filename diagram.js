@@ -320,8 +320,9 @@ function nodeDecl(n) {
   // A single space, not "": Mermaid shows a node's id in place of an empty
   // label, so "" would print "point" wherever the diagram is rendered.
   if (isPoint(n)) return n.id + '@{ shape: text, label: " " }';
-  if (n.shape === 'icon') return n.id + '@{ icon: ' + JSON.stringify(n.icon || '') + (n.form ? ', form: ' + JSON.stringify(n.form) : '') + ', label: ' + quoteLabel(n.label) + ' }';
-  if (n.shape === 'image') return n.id + '@{ img: ' + JSON.stringify(n.img || '') + ', label: ' + quoteLabel(n.label) + ' }';
+  const extra = n.mediaExtra ? ', ' + n.mediaExtra : '';
+  if (n.shape === 'icon') return n.id + '@{ icon: ' + JSON.stringify(n.icon || '') + (n.form ? ', form: ' + JSON.stringify(n.form) : '') + ', label: ' + quoteLabel(n.label) + extra + ' }';
+  if (n.shape === 'image') return n.id + '@{ img: ' + JSON.stringify(n.img || '') + ', label: ' + quoteLabel(n.label) + extra + ' }';
   if (s.v11) {
     return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) && !n.label ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
   }
@@ -532,6 +533,7 @@ function toMermaid(d) {
   // ("external", "datastore"), which a style per block would lose.
   const used = [];
   for (const n of order) for (const c of n.classes || []) if (!used.includes(c) && (d.classDefs || {})[c]) used.push(c);
+  // `order` holds the groups too (with blocks), so a class on a subgraph is written the same way.
   if ((d.classDefs || {}).default) lines.push('  classDef default ' + d.classDefs.default);
   for (const c of used) {
     lines.push('  classDef ' + c + ' ' + d.classDefs[c]);
@@ -543,10 +545,13 @@ function toMermaid(d) {
   }
   // A group's colours and title size, as a standard `style` on the subgraph.
   for (const g of d.groups) {
+    const base = readLook((g.classes || []).map((c) => (d.classDefs || {})[c]).reverse().filter(Boolean).join(','));
     const parts = [];
-    if (g.fill) parts.push('fill:' + g.fill);
-    if (g.stroke) parts.push('stroke:' + g.stroke);
-    if (g.color) parts.push('color:' + g.color);
+    if (g.fill && g.fill !== base.fill) parts.push('fill:' + g.fill);
+    if (g.stroke && g.stroke !== base.stroke) parts.push('stroke:' + g.stroke);
+    if (g.strokeWidth && g.strokeWidth !== base.strokeWidth) parts.push('stroke-width:' + g.strokeWidth + 'px');
+    if (g.dash && !base.dash) parts.push('stroke-dasharray:5 4');
+    if (g.color && g.color !== base.color) parts.push('color:' + g.color);
     if (g.fontSize && g.fontSize !== GROUP_FONT_SIZE) parts.push('font-size:' + g.fontSize + 'px');
     if (parts.length && hasBlocks(g)) lines.push('  style ' + g.id + ' ' + parts.join(','));
   }
@@ -711,6 +716,8 @@ function readNodeRef(s, i) {
     // An icon or an image node: Mermaid's own kinds, kept with their source.
     const media = props.icon ? { shape: 'icon', icon: unquoteLabel(props.icon), form: props.form ? unquoteLabel(props.form) : null }
       : props.img ? { shape: 'image', img: unquoteLabel(props.img) } : null;
+    // Their other settings (label position, size, aspect lock) ride along as written.
+    if (media) media.extra = ['pos', 'w', 'h', 'constraint'].filter((k) => props[k] != null).map((k) => k + ': ' + props[k]).join(', ') || null;
     return Object.assign({ id, shape: props.shape ? SHAPE_BY_V11[props.shape] || 'rect' : null,
              label: props.label != null ? unquoteLabel(props.label) : null, next: end.next, cls: end.cls }, media);
   }
@@ -819,9 +826,11 @@ function afterHeader(text, kind) {
   let k = 0;
   if (lines[0] && lines[0].trim() === '---') { k = lines.findIndex((l, j) => j > 0 && l.trim() === '---') + 1; }
   const front = lines.slice(0, k);
-  while (k < lines.length && (!lines[k].trim() || lines[k].trim().startsWith('%%'))) k++;
+  // An %%{init}%% directive or a comment before the header stays before it.
+  const pre = [];
+  while (k < lines.length && (!lines[k].trim() || lines[k].trim().startsWith('%%'))) { if (lines[k].trim()) pre.push(lines[k].trim()); k++; }
   if (!lines[k] || !kind.test(lines[k].trim())) return null;
-  return { front, header: lines[k].trim(), body: lines.slice(k + 1) };
+  return { front: front.concat(pre), header: lines[k].trim(), body: lines.slice(k + 1) };
 }
 
 // stateDiagram(-v2): states are rounded boxes, [*] the start dot and the stop
@@ -856,6 +865,7 @@ function stateToFlowchart(text) {
   const seen = new Set();
   const scope = [];
   let notes = 0;
+  let inDescr = false;
   const pad = () => '  '.repeat(scope.length + 1);
   const ref = (token, side) => {
     if (token === '[*]') {
@@ -870,13 +880,19 @@ function stateToFlowchart(text) {
     seen.add(id);
     if (kinds[id] === 'choice') return id + '{" "}';
     if (kinds[id]) return id + '@{ shape: fork }';
-    // Mermaid shows a described state as its name over its description.
-    const label = [names[id] || id].concat(descs[id] || []).join('\n');
+    // Mermaid shows a described state by its description alone; one named
+    // with `state "Name" as id` by its name over the description.
+    const label = (names[id] ? [names[id]].concat(descs[id] || []) : descs[id] || [id]).join('\n');
     return id + '(' + quoteLabel(label) + ')';
   };
   for (const l of flat) {
     let m;
-    if (!l || l.startsWith('%%') || l === '--' || /^(hide|scale|accTitle|accDescr)\b/.test(l)) continue;
+    if (inDescr) { out.push(pad() + l); if (l.includes('}')) inDescr = false; continue; }
+    if (/^accDescr\s*\{/.test(l) && !l.includes('}')) { out.push(pad() + l); inDescr = true; continue; }
+    // Comments and accessibility text go through as they are; the flowchart
+    // reader keeps them.
+    if (l.startsWith('%%') || /^(accTitle|accDescr)\b/.test(l)) { out.push(pad() + l); continue; }
+    if (!l || l === '--' || /^(hide|scale)\b/.test(l)) continue;
     if ((m = l.match(/^direction\s+(TB|TD|BT|LR|RL)\b/i))) {
       if (scope.length) out.push(pad() + 'direction ' + m[1].toUpperCase());
       else dir = m[1].toUpperCase();
@@ -884,6 +900,8 @@ function stateToFlowchart(text) {
     }
     if ((m = l.match(/^state\s+(?:"([^"]*)"\s+as\s+)?([\w-]+)\s*\{$/))) {
       out.push(pad() + 'subgraph ' + m[2] + '[' + quoteLabel(m[1] || names[m[2]] || m[2]) + ']');
+      // Mermaid lays a composite state top to bottom unless it says otherwise.
+      out.push(pad() + '  direction TB');
       scope.push(m[2]);
       seen.add(m[2]);
       continue;
@@ -896,7 +914,7 @@ function stateToFlowchart(text) {
         ', label: ' + quoteLabel(m[3].trim()) + ' }');
       continue;
     }
-    if ((m = l.match(/^(\S+)\s*-->\s*([^:\s]+)\s*(?::\s*(.*))?$/))) {
+    if ((m = l.match(/^(\S+)\s*-->\s*([^:\s]+(?::::[\w-]+)?)\s*(?::\s*(.*))?$/))) {
       const from = ref(m[1], 'from');
       const to = ref(m[2], 'to');
       out.push(pad() + from + (m[3] ? ' -->|' + quoteLabel(m[3].trim()) + '| ' : ' --> ') + to);
@@ -939,11 +957,13 @@ function blockToFlowchart(text) {
   let anon = 0;
   for (const raw of src.body) {
     const l = raw.trim();
-    if (!l || l.startsWith('%%')) continue;
+    if (!l) continue;
+    if (l.startsWith('%%') || /^(accTitle|accDescr)\b/.test(l)) { links.push(l); continue; }
     const top = stack[stack.length - 1];
     let m;
     if ((m = l.match(/^columns\s+(\d+|auto)\s*$/))) { top.columns = m[1] === 'auto' ? null : +m[1]; continue; }
-    if (/^(classDef|class|style|linkStyle)\b/.test(l) || /(-->|---|-\.-|==>|~~~)/.test(l)) { links.push(l); continue; }
+    // An arrow outside quotes makes it a line of links; one inside a label doesn't.
+    if (/^(classDef|class|style|linkStyle)\b/.test(l) || /(-->|---|-\.-|==>|~~~)/.test(l.replace(/"[^"]*"/g, '""'))) { links.push(l); continue; }
     if (l === 'end') { if (stack.length > 1) stack.pop(); continue; }
     for (const tok of items(l)) {
       const blk = tok.match(/^block(?::([\w-]+))?(?::(\d+))?$/);
@@ -1017,15 +1037,15 @@ function blockToFlowchart(text) {
 
 // A quoted label or an `@{ ... }` block may run over several lines; each is
 // joined into one statement (a newline inside quotes stays a line break, one
-// inside braces separates properties). An `accDescr { ... }` block is dropped.
+// inside braces separates properties). So is an `accDescr { ... }` block.
 function joinOpenLines(lines) {
   const out = [];
   let pending = null;     // the raw lines of a statement still open
-  let inDescr = false;
+  let descr = null;       // the lines of an `accDescr { ... }` block being read
   const joined = (raw) => raw.reduce((t, l) => t + (open(t).quote ? '\n' : ', ') + l.trim());
   for (const l of lines) {
-    if (inDescr) { if (l.includes('}')) inDescr = false; continue; }
-    if (pending == null && /^\s*accDescr\s*\{/.test(l) && !l.includes('}')) { inDescr = true; continue; }
+    if (descr) { descr.push(l.trim()); if (l.includes('}')) { out.push(descr.join('\n')); descr = null; } continue; }
+    if (pending == null && /^\s*accDescr\s*\{/.test(l) && !l.includes('}')) { descr = [l.trim()]; continue; }
     const raw = pending ? pending.concat([l]) : [l];
     const text = joined(raw);
     if (!text.trim().startsWith('%%') && open(text).any) {
@@ -1086,6 +1106,7 @@ function parseMermaid(text) {
             shape, x: 0, y: 0, w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: !!ref.bold };
       if (ref.icon) { n.icon = ref.icon; if (ref.form) n.form = ref.form; }
       if (ref.img) n.img = ref.img;
+      if (ref.extra) n.mediaExtra = ref.extra;
       d.nodes.push(n);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
@@ -1118,7 +1139,7 @@ function parseMermaid(text) {
   // `;` ends a statement just as a newline does (`flowchart LR; A-->B;`), so
   // statements are split there too -- but not inside a quoted label or a
   // shape's brackets, and never in a `%%` line.
-  lines = joinOpenLines(lines).flatMap((l) => l.trim().startsWith('%%') ? [l] : splitStatements(l));
+  lines = joinOpenLines(lines).flatMap((l) => /^\s*(%%|accDescr)/.test(l) ? [l] : splitStatements(l));
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -1305,7 +1326,10 @@ function parseMermaid(text) {
   }
 
   for (const g of d.groups) {
-    const look = readLook(styles[g.id]);
+    const look = readLook([styles[g.id]].concat((classOf[g.id] || []).map((c) => classDefs[c]).reverse()).filter(Boolean).join(','));
+    if (classOf[g.id]) g.classes = classOf[g.id].filter((c, k, all) => all.indexOf(c) === k);
+    if (look.strokeWidth) g.strokeWidth = look.strokeWidth;
+    if (look.dash) g.dash = true;
     if (look.fontSize) g.fontSize = look.fontSize;
     if (look.fill && look.fill !== 'none') g.fill = look.fill;
     if (look.stroke && look.stroke !== 'none') g.stroke = look.stroke;
@@ -1358,10 +1382,13 @@ function applyLayout(d, layout, invisible) {
     // subgraphs are stacked instead, each still running sideways inside.
     const sideways = d.direction === 'LR' || d.direction === 'RL';
     const groups = top.filter((it) => it.members && !it.direction);
-    if (sideways && size.w > 4 * size.h && groups.length > 1) {
+    // Only a diagram made of subgraphs: with blocks between them the flow
+    // itself runs sideways, and stacking would just make it tall.
+    if (sideways && size.w > 4 * size.h && groups.length > 1 && groups.length === top.length) {
+      // Kept: the alt text then says what the picture shows -- subgraphs
+      // running sideways, stacked down the page.
       groups.forEach((g) => { g.direction = d.direction; });
       layoutBlock(d, top, 40, 40, 'TB', links);
-      groups.forEach((g) => { delete g.direction; });
     } else if (!d.groups.length) wrapLong(d, size);
   } else if (unplaced.length) {
     const placed = d.nodes.filter((n) => !unplaced.includes(n));

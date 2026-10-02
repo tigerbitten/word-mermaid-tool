@@ -1,0 +1,1791 @@
+@@@ 001-web-arch-basic
+graph TD
+    User[User Browser] --> CDN[CloudFront CDN]
+    CDN --> LB[Load Balancer]
+    LB --> Web1[Web Server 1]
+    LB --> Web2[Web Server 2]
+    Web1 --> DB[(PostgreSQL)]
+    Web2 --> DB
+    Web1 --> Cache[(Redis Cache)]
+    Web2 --> Cache
+@@@ 002-cicd-lr
+flowchart LR
+    A[Developer Push] --> B[GitHub Actions]
+    B --> C{Tests Pass?}
+    C -->|Yes| D[Build Docker Image]
+    C -->|No| E[Notify Developer]
+    D --> F[Push to ECR]
+    F --> G[Deploy to Staging]
+    G --> H{Manual Approval}
+    H -->|Approved| I[Deploy to Production]
+    H -->|Rejected| E
+@@@ 003-login-decision
+flowchart TD
+    Start([Start]) --> Input[/Enter username and password/]
+    Input --> Validate{Credentials valid?}
+    Validate -- No --> Attempts{Attempts >= 3?}
+    Attempts -- Yes --> Lock[Lock account]
+    Attempts -- No --> Input
+    Validate -- Yes --> MFA{MFA enabled?}
+    MFA -- Yes --> OTP[/Enter OTP/]
+    OTP --> Dashboard
+    MFA -- No --> Dashboard[Show dashboard]
+    Lock --> End([End])
+    Dashboard --> End
+@@@ 004-microservices-subgraphs
+flowchart TB
+    subgraph Client
+        Web[Web App]
+        Mobile[Mobile App]
+    end
+    subgraph Gateway["API Gateway"]
+        GW[Kong]
+    end
+    subgraph Services
+        Auth[Auth Service]
+        Orders[Order Service]
+        Payments[Payment Service]
+        Inventory[Inventory Service]
+    end
+    subgraph Data["Data Layer"]
+        AuthDB[(Users DB)]
+        OrderDB[(Orders DB)]
+        MQ[[Kafka]]
+    end
+    Web --> GW
+    Mobile --> GW
+    GW --> Auth
+    GW --> Orders
+    Orders --> Payments
+    Orders --> Inventory
+    Auth --> AuthDB
+    Orders --> OrderDB
+    Orders -.-> MQ
+    Payments -.-> MQ
+@@@ 005-llm-reply-fenced
+Here's a Mermaid diagram showing the request flow through your system:
+
+```mermaid
+flowchart LR
+    Client -->|HTTPS| ALB[Application Load Balancer]
+    ALB --> ECS[ECS Fargate Tasks]
+    ECS --> RDS[(Amazon RDS)]
+    ECS --> S3[(S3 Bucket)]
+```
+
+**How it works:**
+1. The client sends an HTTPS request to the ALB.
+2. The ALB forwards to the Fargate tasks, which read and write RDS and S3.
+
+Let me know if you'd like me to add monitoring components!
+@@@ 006-cpu-datapath
+flowchart LR
+    PC[Program Counter] --> IMEM[(Instruction Memory)]
+    IMEM -->|"instr[31:0]"| DEC[Decoder]
+    DEC -->|rs1, rs2| RF[Register File]
+    DEC -->|imm| IMMGEN[Imm Gen]
+    RF -->|rd1| ALU{{ALU}}
+    RF -->|rd2| MUX[/ALUSrc MUX\]
+    IMMGEN --> MUX
+    MUX --> ALU
+    ALU -->|addr| DMEM[(Data Memory)]
+    DMEM -->|load data| WB[Writeback MUX]
+    ALU --> WB
+    WB -->|wd| RF
+    ALU ==>|branch target| PC
+@@@ 007-network-topology
+graph TB
+    Internet((Internet)) --> FW[Firewall]
+    FW --> Router{Core Router}
+    Router --> SW1[Switch A]
+    Router --> SW2[Switch B]
+    SW1 --> PC1[Workstation 1]
+    SW1 --> PC2[Workstation 2]
+    SW2 --> SRV1[File Server]
+    SW2 --> SRV2[Print Server]
+    SW1 --- AP[Wireless AP]
+    AP -.- Laptop[Laptop]
+@@@ 008-org-chart
+graph TD
+    CEO[CEO<br/>Jane Smith] --> CTO[CTO<br/>Bob Lee]
+    CEO --> CFO[CFO<br/>Alice Wong]
+    CEO --> COO[COO<br/>Raj Patel]
+    CTO --> ENG[VP Engineering]
+    CTO --> PROD[VP Product]
+    ENG --> FE[Frontend Team]
+    ENG --> BE[Backend Team]
+    ENG --> SRE[SRE Team]
+    CFO --> ACC[Accounting]
+    COO --> OPS[Operations]
+@@@ 009-ml-pipeline
+flowchart LR
+    subgraph Ingestion
+        direction TB
+        RAW[(Raw Data Lake)] --> ETL[Spark ETL]
+    end
+    subgraph Training["Model Training"]
+        direction TB
+        FE[Feature Engineering] --> TRAIN[Train XGBoost]
+        TRAIN --> EVAL{AUC > 0.85?}
+    end
+    subgraph Serving
+        REG[(Model Registry)] --> API[FastAPI Endpoint]
+    end
+    ETL --> FE
+    EVAL -->|yes| REG
+    EVAL -->|no| FE
+    API --> MON[Monitoring]
+    MON -. drift detected .-> FE
+@@@ 010-shapes-all-brackets
+flowchart TD
+    A[Rectangle] --> B(Rounded)
+    B --> C([Stadium])
+    C --> D[[Subroutine]]
+    D --> E[(Database)]
+    E --> F((Circle))
+    F --> G>Asymmetric]
+    G --> H{Rhombus}
+    H --> I{{Hexagon}}
+    I --> J[/Parallelogram/]
+    J --> K[\Parallelogram alt\]
+    K --> L[/Trapezoid\]
+    L --> M[\Trapezoid alt/]
+    M --> N(((Double circle)))
+@@@ 011-v11-shapes-supported
+flowchart LR
+    A@{ shape: rect, label: "Process" } --> B@{ shape: rounded, label: "Event" }
+    B --> C@{ shape: stadium, label: "Terminal" }
+    C --> D@{ shape: fr-rect, label: "Subprocess" }
+    D --> E@{ shape: cyl, label: "Database" }
+    E --> F@{ shape: circle, label: "Start" }
+    F --> G@{ shape: diam, label: "Decision" }
+    G --> H@{ shape: hex, label: "Prepare" }
+    H --> I@{ shape: lean-r, label: "Input" }
+    I --> J@{ shape: lean-l, label: "Output" }
+    J --> K@{ shape: trap-b, label: "Priority" }
+    K --> L@{ shape: trap-t, label: "Manual" }
+    L --> M@{ shape: dbl-circ, label: "Stop" }
+    M --> N@{ shape: doc, label: "Report" }
+    N --> O@{ shape: st-rect, label: "Batch" }
+    O --> P@{ shape: h-cyl, label: "Queue" }
+    P --> Q@{ shape: tri, label: "Extract" }
+    Q --> R@{ shape: delay, label: "Wait" }
+@@@ 012-v11-shapes-unsupported
+flowchart TD
+    A@{ shape: cloud, label: "AWS" } --> B@{ shape: bolt, label: "Signal" }
+    B --> C@{ shape: notch-rect, label: "Card" }
+    C --> D@{ shape: lin-cyl, label: "Disk" }
+    D --> E@{ shape: win-pane, label: "Internal storage" }
+    E --> F@{ shape: docs, label: "Many docs" }
+    F --> G@{ shape: lin-rect, label: "Lined" }
+    G --> H@{ shape: fr-circ, label: "Stop" }
+    H --> I@{ shape: hourglass, label: "Collate" }
+    I --> J@{ shape: comment, label: "Note" }
+    J --> K@{ shape: curv-trap, label: "Display" }
+    K --> L@{ shape: div-rect, label: "Divided" }
+    L --> M@{ shape: f-circ, label: "Junction" }
+    M --> N@{ shape: lin-doc, label: "Lined doc" }
+    N --> O@{ shape: notch-pent, label: "Loop limit" }
+    O --> P@{ shape: flip-tri, label: "Manual file" }
+    P --> Q@{ shape: sl-rect, label: "Manual input" }
+    Q --> R@{ shape: bow-rect, label: "Stored data" }
+    R --> S@{ shape: tag-doc, label: "Tagged doc" }
+    S --> T@{ shape: tag-rect, label: "Tagged proc" }
+    T --> U@{ shape: brace-r, label: "Right brace" }
+    U --> V@{ shape: braces, label: "Braces" }
+    V --> W@{ shape: odd, label: "Odd" }
+    W --> X@{ shape: flag, label: "Paper tape" }
+@@@ 013-v11-shape-aliases
+flowchart LR
+    A@{ shape: process, label: "Proc" } --> B@{ shape: database, label: "DB" }
+    B --> C@{ shape: decision, label: "OK?" }
+    C --> D@{ shape: question, label: "Really?" }
+    D --> E@{ shape: document, label: "Doc" }
+    E --> F@{ shape: terminal, label: "End" }
+    F --> G@{ shape: card, label: "Card" }
+    G --> H@{ shape: lightning-bolt, label: "Zap" }
+    H --> I@{ shape: junction }
+    I --> J@{ shape: start }
+    J --> K@{ shape: stop }
+    K --> L@{ shape: event, label: "Ev" }
+@@@ 014-icons-images
+flowchart LR
+    U@{ icon: "fa:user", form: "circle", label: "User", pos: "b" } --> W@{ icon: "fa:globe", label: "Website", h: 60 }
+    W --> API@{ img: "https://example.com/api.png", label: "API", pos: "t", w: 60, h: 60, constraint: "on" }
+    API --> D@{ icon: "aws:rds", form: "square", label: "RDS" }
+@@@ 015-fa-labels
+flowchart TD
+    A[fa:fa-user Customer] --> B(fa:fa-shopping-cart Cart)
+    B --> C{fa:fa-credit-card Pay?}
+    C -->|fa:fa-check ok| D[fa:fa-truck Ship]
+    C -->|fa:fa-ban declined| E[fa:fa-envelope Email]
+@@@ 016-classdef-styles
+flowchart LR
+    A[Request]:::input --> B[Validate]:::process
+    B --> C{Valid?}:::decision
+    C -->|yes| D[Save]:::process
+    C -->|no| E[Reject]:::error
+    classDef input fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef process fill:#fff3e0,stroke:#e65100
+    classDef decision fill:#f3e5f5,stroke:#4a148c
+    classDef error fill:#ffebee,stroke:#b71c1c,color:#b71c1c
+@@@ 017-class-statement-named-colours
+flowchart TD
+    A[Frontend] --> B[Backend]
+    B --> C[(Database)]
+    classDef blue fill:lightblue,stroke:navy
+    classDef green fill:#90EE90
+    class A,B blue
+    class C green
+    style A stroke-dasharray: 5 5
+@@@ 018-style-lines
+flowchart LR
+    id1(Start)-->id2(Stop)
+    style id1 fill:#f9f,stroke:#333,stroke-width:4px
+    style id2 fill:#bbf,stroke:#f66,stroke-width:2px,color:#fff,stroke-dasharray: 5 5
+@@@ 019-linkstyle
+flowchart LR
+    A --> B --> C --> D
+    linkStyle 0 stroke:#ff3,stroke-width:4px,color:red
+    linkStyle 1,2 stroke:#0a0,stroke-width:2px
+    linkStyle default interpolate basis
+@@@ 020-edge-kinds
+flowchart LR
+    A --> B
+    A --- C
+    A -.-> D
+    A -.- E
+    A ==> F
+    A === G
+    A <--> H
+    A --o I
+    A --x J
+    A o--o K
+    A x--x L
+    A <==> M
+    A <-.-> N
+    A ~~~ O
+@@@ 021-edge-text-forms
+flowchart TD
+    A -- text on link --> B
+    A -->|pipe text| C
+    A -. dotted text .-> D
+    A == thick text ==> E
+    A -- open text --- F
+    A ---|open pipe| G
+    A -.->|dotted pipe| H
+    A ==>|thick pipe| I
+@@@ 022-long-links
+flowchart TD
+    A[Start] --> B{Is it?}
+    B -->|Yes| C[OK]
+    C --> D[Rethink]
+    D --> B
+    B ---->|No| E[End]
+    A -----> E
+    C -...-> E
+@@@ 023-ampersand
+flowchart TD
+    A & B --> C & D
+    C --> E
+    D --> E
+    E --> F & G & H
+@@@ 024-chained
+flowchart LR
+    A --> B --> C --> D --> E
+    E -->|loop| A
+    F --- G --- H
+    X -.-> Y ==> Z
+@@@ 025-edge-ids
+flowchart LR
+    A e1@--> B
+    B e2@==> C
+    C e3@-.-> D
+    e1@{ animate: true }
+    e2@{ animation: fast }
+    e3@{ curve: linear }
+@@@ 026-comments
+flowchart TD
+    %% This is the entry point
+    A[Start] --> B[Process]
+    %% TODO: add error handling
+    B --> C[End]
+    %% end of flow
+@@@ 027-frontmatter
+---
+title: Order Fulfillment
+config:
+  theme: forest
+  flowchart:
+    curve: stepBefore
+---
+flowchart LR
+    Order[New Order] --> Pick[Pick Items]
+    Pick --> Pack[Pack Box]
+    Pack --> Ship[Ship]
+@@@ 028-init-directive
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#ffcc00', 'edgeLabelBackground':'#ffffee'}}}%%
+graph LR
+    A[Christmas] -->|Get money| B(Go shopping)
+    B --> C{Let me think}
+    C -->|One| D[Laptop]
+    C -->|Two| E[iPhone]
+    C -->|Three| F[fa:fa-car Car]
+@@@ 029-markdown-strings
+flowchart LR
+    A["`**Bold title**`"] --> B["`Normal and **bold** part`"]
+    B --> C["`Line one
+Line two`"]
+    C -->|"`**bold edge**`"| D["`*italic* text`"]
+    subgraph S["`**Markdown subgraph**`"]
+        D
+    end
+@@@ 030-unicode-emoji
+flowchart LR
+    A[🚀 Launch] --> B[Café ☕]
+    B --> C[日本語のノード]
+    C --> D[Ünïcödé — dash]
+    D --> E[✅ Done]
+    E -->|→ next| F[Ελληνικά]
+@@@ 031-html-entities
+flowchart LR
+    A["A double quote:#quot;"] --> B["A dec char:#9829;"]
+    B --> C["Less #lt; than"]
+    C --> D["Hash #35; sign"]
+    D --> E["Amp #amp; sand"]
+@@@ 032-br-variants
+flowchart TD
+    A[Line 1<br>Line 2] --> B[Line A<br/>Line B]
+    B --> C["Quoted<br />break"]
+    C -->|edge<br>label| D[Done]
+@@@ 033-click-lines
+flowchart LR
+    A[Docs] --> B[GitHub]
+    B --> C[Callback]
+    click A "https://docs.example.com" "Open docs" _blank
+    click B href "https://github.com" _blank
+    click C callback "Tooltip for callback"
+@@@ 034-semicolons
+graph TD;
+    A-->B;
+    A-->C;
+    B-->D;
+    C-->D;
+@@@ 035-trailing-ws
+flowchart LR   
+    A[Alpha] --> B[Beta]   
+    B --> C[Gamma]	
+    
+    C --> D[Delta]  
+@@@ 036-crlf crlf
+flowchart TD
+    A[Receive request] --> B{Authenticated?}
+    B -->|Yes| C[Process]
+    B -->|No| D[401]
+    subgraph Backend
+        C --> E[(DB)]
+    end
+@@@ 037-tabs tabs
+flowchart LR
+    subgraph Pipeline
+        direction LR
+        A[Lint] --> B[Test]
+        B --> C[Build]
+    end
+    C --> D[Deploy]
+@@@ 038-direction-rl
+flowchart RL
+    A[Output] --- B[Stage 3]
+    B --- C[Stage 2]
+    C --- D[Stage 1]
+    D --- E[Input]
+@@@ 039-direction-bt
+flowchart BT
+    Leaf1[Leaf 1] --> Mid[Middle]
+    Leaf2[Leaf 2] --> Mid
+    Mid --> Root[Root]
+@@@ 040-graph-no-dir
+graph
+    A --> B
+    B --> C
+@@@ 041-nested-subgraphs
+flowchart TB
+    subgraph AWS["AWS Cloud"]
+        subgraph VPC["VPC 10.0.0.0/16"]
+            subgraph Public["Public Subnet"]
+                ALB[ALB]
+                NAT[NAT Gateway]
+            end
+            subgraph Private["Private Subnet"]
+                App1[App Server 1]
+                App2[App Server 2]
+                RDS[(RDS Postgres)]
+            end
+        end
+        S3[(S3)]
+    end
+    Users((Users)) --> ALB
+    ALB --> App1
+    ALB --> App2
+    App1 --> RDS
+    App2 --> RDS
+    App1 --> S3
+    App2 --> NAT
+@@@ 042-subgraph-edges
+flowchart LR
+    subgraph frontend [Frontend]
+        UI[React UI]
+    end
+    subgraph backend [Backend]
+        API[REST API]
+        Worker[Worker]
+    end
+    subgraph storage [Storage]
+        DB[(DB)]
+    end
+    frontend --> backend
+    backend --> storage
+    UI --> API
+@@@ 043-subgraph-quoted-no-id
+flowchart TD
+    subgraph "Data Sources"
+        A[CRM]
+        B[ERP]
+    end
+    subgraph "Processing Layer"
+        C[ETL]
+    end
+    A --> C
+    B --> C
+@@@ 044-subgraph-multiword-unquoted
+flowchart TD
+    subgraph Control Plane
+        API[kube-apiserver]
+        ETCD[(etcd)]
+        SCHED[scheduler]
+    end
+    subgraph Worker Node
+        KUBELET[kubelet]
+        POD1[Pod]
+    end
+    API --> ETCD
+    SCHED --> API
+    KUBELET --> API
+    KUBELET --> POD1
+@@@ 045-subgraph-after-edges
+flowchart LR
+    A[Client] --> B[Gateway]
+    B --> C[Service A]
+    B --> D[Service B]
+    C --> E[(DB)]
+    D --> E
+    subgraph Internal
+        C
+        D
+    end
+    subgraph Persistence
+        E
+    end
+@@@ 046-subgraph-direction-nested
+flowchart TB
+    subgraph top[Top Level]
+        direction LR
+        subgraph B1[Branch 1]
+            direction TB
+            i1 --> f1
+        end
+        subgraph B2[Branch 2]
+            direction TB
+            i2 --> f2
+        end
+    end
+    A --> top --> B
+    B1 --> B2
+@@@ 047-state-ish-flow
+flowchart LR
+    Idle((Idle)) -->|start| Running
+    Running -->|pause| Paused
+    Paused -->|resume| Running
+    Running -->|finish| Done(((Done)))
+    Running -->|error| Failed
+    Failed -->|retry| Running
+    Paused -->|cancel| Idle
+@@@ 048-user-journey
+flowchart LR
+    Land[Landing Page] --> Signup{Sign up?}
+    Signup -->|Yes| Form[Fill form]
+    Signup -->|No| Browse[Browse as guest]
+    Form --> Verify[Verify email]
+    Verify --> Onboard[Onboarding tour]
+    Browse --> Prompt[Signup prompt]
+    Prompt --> Form
+    Onboard --> Dash[Dashboard]
+@@@ 049-data-pipeline
+graph LR
+    S1[Kafka Topic: clicks] --> F[Flink Job]
+    S2[Kafka Topic: orders] --> F
+    F --> W[(Snowflake)]
+    W --> DBT[dbt models]
+    DBT --> BI[Looker]
+    DBT --> ML[Feature Store]
+@@@ 050-hardware-block
+flowchart LR
+    CLK[Clock Gen] --> CPU
+    subgraph SoC
+        CPU[ARM Cortex-A53] <--> BUS{{AXI Interconnect}}
+        GPU[Mali GPU] <--> BUS
+        BUS <--> DDR[DDR Controller]
+        BUS <--> PER[Peripheral Bridge]
+    end
+    DDR <--> RAM[(LPDDR4)]
+    PER --> UART[UART]
+    PER --> SPI[SPI]
+    PER --> I2C[I2C]
+@@@ 051-copilot-style
+```mermaid
+graph TD
+    A[Start] --> B{Is it working?}
+    B -- Yes --> C[Great!]
+    B -- No --> D[Debug]
+    D --> B
+```
+@@@ 052-gemini-reply
+Sure! Below is a flowchart representing the incident response process.
+
+```mermaid
+flowchart TD
+    A[Alert Triggered] --> B{Severity?}
+    B -->|SEV1| C[Page On-call]
+    B -->|SEV2| D[Create Ticket]
+    B -->|SEV3| E[Log Only]
+    C --> F[Incident Channel]
+    F --> G[Mitigate]
+    G --> H[Postmortem]
+```
+
+### Explanation
+* **SEV1** incidents page the on-call engineer immediately.
+* Lower severities are handled asynchronously.
+@@@ 053-two-fences-reply
+Here is the first version:
+
+```mermaid
+flowchart LR
+    A --> B
+```
+
+And here is an improved one with error handling:
+
+```mermaid
+flowchart LR
+    A --> B
+    B --> C{Error?}
+    C -->|yes| A
+```
+@@@ 054-fence-no-lang
+```
+flowchart LR
+    A[No language tag] --> B[Still Mermaid]
+```
+@@@ 055-label-special-chars
+flowchart LR
+    A["Price > $100?"] --> B["50% off (limited)"]
+    B --> C["key: value, other: thing"]
+    C --> D["C# / F# code"]
+    D --> E["array[0] = x"]
+    E --> F["{json: true}"]
+    F --> G["a|b pipe"]
+@@@ 056-edge-label-special
+flowchart LR
+    A -->|"x > 5"| B
+    B -->|"a|b"| C
+    C -->|"retry (3x)"| D
+    D -- "quoted text" --> E
+    E -->|50%| F
+@@@ 057-ids-with-dashes-dots
+flowchart LR
+    user-svc --> order-svc
+    order-svc --> db_main[(main db)]
+    api-gw-v2 --> user-svc
+@@@ 058-numeric-ids
+flowchart TD
+    1[Step one] --> 2[Step two]
+    2 --> 3[Step three]
+    3 --> 1a[Step 1a]
+@@@ 059-reserved-like-ids
+flowchart LR
+    start --> process
+    process --> ending
+    ending --> finish
+    style start fill:#cfc
+@@@ 060-k8s-deploy
+flowchart TB
+    dev[Developer] -->|git push| repo[(Git Repo)]
+    repo -->|webhook| argo[Argo CD]
+    subgraph cluster[Kubernetes Cluster]
+        direction TB
+        argo --> deploy[Deployment]
+        deploy --> rs[ReplicaSet]
+        rs --> p1[Pod 1] & p2[Pod 2] & p3[Pod 3]
+        svc[Service] --> p1 & p2 & p3
+        ing[Ingress] --> svc
+    end
+    user((User)) --> ing
+@@@ 061-auth-oauth
+flowchart LR
+    U[User] -->|1. Login click| App[Client App]
+    App -->|2. Redirect| AS[Authorization Server]
+    AS -->|3. Auth code| App
+    App -->|4. Code + secret| AS
+    AS -->|5. Access token| App
+    App -->|6. API call + token| RS[Resource Server]
+@@@ 062-decision-tree
+flowchart TD
+    Q1{Is the data labeled?} -->|Yes| Q2{Is the target continuous?}
+    Q1 -->|No| U[Unsupervised Learning]
+    Q2 -->|Yes| R[Regression]
+    Q2 -->|No| C[Classification]
+    U --> Q3{Need groups?}
+    Q3 -->|Yes| K[K-Means]
+    Q3 -->|No| P[PCA]
+@@@ 063-etl-styled
+flowchart LR
+    subgraph src[Sources]
+        A[(MySQL)]
+        B[(MongoDB)]
+        C[REST API]
+    end
+    subgraph proc[Processing]
+        D[Airflow DAG]
+        E[Spark]
+    end
+    subgraph dst[Warehouse]
+        F[(BigQuery)]
+    end
+    A & B & C --> D --> E --> F
+    style src fill:#e3f2fd
+    style proc fill:#fff8e1
+    style dst fill:#e8f5e9
+@@@ 064-serverless
+flowchart LR
+    Client -->|POST /upload| APIGW[API Gateway]
+    APIGW --> L1[λ Upload Handler]
+    L1 --> S3[(S3 Raw)]
+    S3 -->|ObjectCreated| L2[λ Thumbnailer]
+    L2 --> S3T[(S3 Thumbs)]
+    L1 --> DDB[(DynamoDB)]
+    L2 --> SNS>SNS Topic]
+    SNS --> Email[Email Notify]
+@@@ 065-event-driven
+flowchart LR
+    P1[Order Service] -- OrderPlaced --> EB{{Event Bus}}
+    P2[Payment Service] -- PaymentCaptured --> EB
+    EB -- OrderPlaced --> C1[Inventory]
+    EB -- PaymentCaptured --> C2[Shipping]
+    EB -. all events .-> C3[(Audit Log)]
+@@@ 066-git-branching
+flowchart LR
+    main1((main)) --> feat[feature/login]
+    feat --> commit1[commit: add form]
+    commit1 --> commit2[commit: add tests]
+    commit2 --> PR{Pull Request}
+    PR -->|approved| main2((main))
+    PR -->|changes requested| commit1
+@@@ 067-retry-hyphen-label
+flowchart LR
+    A[Call API] -- re-try --> A
+    A -- time-out --> B[Fallback]
+    B -- non-blocking --> C[Queue]
+@@@ 068-dotted-label-nospace
+flowchart LR
+    A-. maybe .->B
+    B-.->|yes|C
+    C== bold ==>D
+    D--text-->E
+@@@ 069-multiline-shape-data
+flowchart LR
+    A@{
+        shape: cyl
+        label: "Orders DB"
+    }
+    B@{ shape: rect, label: "API" }
+    B --> A
+@@@ 070-shape-data-on-edge-line
+flowchart TD
+    A@{ shape: stadium, label: "Begin" } --> B@{ shape: diam, label: "Check, then go?" }
+    B -->|yes| C@{ shape: doc, label: "Write report" }
+    B -->|no| D@{ shape: delay, label: "Wait 5 min" }
+    D --> B
+@@@ 071-big-architecture
+flowchart TB
+    subgraph edge[Edge]
+        CF[CloudFront]
+        WAF[AWS WAF]
+    end
+    subgraph app[Application Tier]
+        direction LR
+        ALB[ALB] --> ECS1[ECS Service: web]
+        ALB --> ECS2[ECS Service: api]
+        ECS2 --> SQS[[SQS Queue]]
+        SQS --> WRK[ECS Service: worker]
+    end
+    subgraph data[Data Tier]
+        AUR[(Aurora)]
+        RED[(ElastiCache)]
+        OS[(OpenSearch)]
+    end
+    subgraph obs[Observability]
+        CW[CloudWatch]
+        XR[X-Ray]
+    end
+    Users((Users)) --> CF --> WAF --> ALB
+    ECS1 --> RED
+    ECS2 --> AUR
+    ECS2 --> OS
+    WRK --> AUR
+    ECS1 & ECS2 & WRK -.-> CW
+    ECS2 -.-> XR
+@@@ 072-ci-matrix
+flowchart LR
+    push[git push] --> lint[Lint]
+    push --> unit[Unit tests]
+    unit --> py38[Python 3.8]
+    unit --> py311[Python 3.11]
+    unit --> py312[Python 3.12]
+    lint & py38 & py311 & py312 --> build[Build wheel]
+    build --> pub{Tag?}
+    pub -->|yes| pypi[(PyPI)]
+    pub -->|no| artifact[(Artifact store)]
+@@@ 073-rag-pipeline
+flowchart LR
+    Q[User question] --> E1[Embed query]
+    E1 --> VS[(Vector store)]
+    VS -->|top-k chunks| P[Prompt builder]
+    Q --> P
+    P --> LLM[[LLM]]
+    LLM --> A[Answer]
+    subgraph Indexing
+        direction TB
+        Docs[Documents] --> Chunk[Chunker] --> E2[Embed chunks] --> VS
+    end
+@@@ 074-node-redeclared
+flowchart LR
+    A --> B
+    A[Alpha node] --> C
+    B(Beta round) --> C
+    C --> D{Gamma?}
+    D --> A
+@@@ 075-node-label-later
+flowchart TD
+    A --> B
+    B --> C
+    A[Start here]
+    B{Check}
+    C[(Store)]
+@@@ 076-unicode-ids
+flowchart LR
+    Café --> Thé
+    Thé --> naïve
+@@@ 077-subgraph-id-only-edge-in
+flowchart LR
+    Ext[External] --> G
+    subgraph G[Group]
+        X[Inner X] --> Y[Inner Y]
+    end
+    G --> Out[Outside]
+@@@ 078-mixed-everything
+---
+title: "Everything at once"
+---
+%%{init: {"flowchart": {"htmlLabels": false}}}%%
+flowchart LR
+    %% sources
+    subgraph in["Inputs 📥"]
+        direction TB
+        s1@{ shape: doc, label: "CSV files" }
+        s2[(Postgres)]:::db
+    end
+    s1 & s2 e1@==> etl[["ETL<br/>(nightly)"]]
+    etl -->|"rows #gt; 0"| ok{OK?}
+    ok -- yes --> wh[(Warehouse)]:::db
+    ok -. no .-> alert>Alert]
+    click alert "https://pager.example.com"
+    classDef db fill:#dae8fc,stroke:#6c8ebf
+    linkStyle 1 stroke:#d33,stroke-width:3px
+    e1@{ animate: true }
+@@@ 079-empty-subgraph
+flowchart LR
+    subgraph Future["Coming soon"]
+    end
+    A --> B
+@@@ 080-subgraph-only-one-node-shared
+flowchart TB
+    subgraph S1[Team A]
+        A1[Service A1] --> Shared[Shared Lib]
+    end
+    subgraph S2[Team B]
+        B1[Service B1] --> Shared
+    end
+@@@ 081-self-loop-and-multi
+flowchart LR
+    A[Poller] --> A
+    A --> B[Handler]
+    A --> B
+    B -->|ack| A
+@@@ 082-accessibility
+flowchart LR
+    accTitle: Purchase flow
+    accDescr: A user adds items, checks out and pays.
+    A[Browse] --> B[Cart] --> C[Checkout] --> D[Pay]
+@@@ 083-accdescr-block
+flowchart TD
+    accDescr {
+        Multi-line description
+        of the diagram.
+    }
+    A --> B
+@@@ 084-text-node-and-style-none
+flowchart LR
+    A[Server] --> N[note: runs nightly]
+    style N fill:none,stroke:none
+    A --> B[Client]
+@@@ 085-lr-wide-fanout
+flowchart LR
+    LB[Load balancer] --> S1[Shard 1] & S2[Shard 2] & S3[Shard 3] & S4[Shard 4] & S5[Shard 5] & S6[Shard 6]
+    S1 & S2 & S3 & S4 & S5 & S6 --> AGG[Aggregator]
+@@@ 086-td-tree-deep
+graph TD
+    root --> a1 & a2
+    a1 --> b1 & b2
+    a2 --> b3 & b4
+    b1 --> c1 & c2
+    b2 --> c3
+    b3 --> c4 & c5
+    b4 --> c6
+@@@ 087-classdef-default-and-multi
+flowchart LR
+    classDef default fill:#f5f5f5,stroke:#999
+    classDef hot,warm fill:#ffcccc
+    A:::hot --> B:::warm --> C
+@@@ 088-subgraph-titles-special
+flowchart TB
+    subgraph s1["Region: us-east-1 (primary)"]
+        A[App]
+    end
+    subgraph s2["Region: eu-west-1 #quot;DR#quot;"]
+        B[App replica]
+    end
+    A -.->|async replication| B
+@@@ 089-interaction-many-styles
+flowchart LR
+    A(["fa:fa-play Start"]) --> B["Validate input"]
+    B --> C{"Valid?"}
+    C -- "Yes" --> D["Process"]
+    C -- "No" --> E["Show error"]
+    E --> B
+    D --> F(["fa:fa-stop End"])
+    style A fill:#2ecc71,color:#fff
+    style F fill:#e74c3c,color:#fff
+    style C fill:#f1c40f
+@@@ 090-bidirectional-arch
+flowchart LR
+    Browser <-->|WebSocket| GW[Gateway]
+    GW <--> Chat[Chat service]
+    Chat <--> Redis[(Redis pub/sub)]
+    Chat --> PG[(Postgres)]
+@@@ 091-edge-to-nested-subgraph
+flowchart TB
+    subgraph outer[Outer]
+        subgraph inner[Inner]
+            X
+        end
+        Y
+    end
+    Z --> inner
+    Y --> Z
+@@@ 092-semicolon-oneline
+flowchart LR; A[One]-->B[Two]; B-->C[Three]; C-->A;
+@@@ 093-graph-tb-with-ampersand-labels
+graph TB
+    A[Inputs] -->|validated| B & C
+    B -- yes --> D
+    C -- no --> D
+@@@ 094-labels-with-quotes-unquoted
+flowchart LR
+    A[It's fine] --> B[Say 'hi']
+    B --> C["5' 10#quot; tall"]
+@@@ 095-trailing-end-semicolon
+flowchart TB
+    subgraph one;
+        a1-->a2;
+    end;
+    subgraph two;
+        b1-->b2;
+    end;
+    a2-->b1;
+@@@ 101-repro-open-chain
+flowchart LR
+    A --- B --- C
+@@@ 102-repro-thick-open-chain
+flowchart LR
+    A === B === C
+@@@ 103-repro-hyphen-in-link-text
+flowchart LR
+    A -- re-try --> B
+@@@ 104-repro-link-text-no-spaces
+flowchart LR
+    A--text-->B
+@@@ 105-repro-member-named-later
+flowchart LR
+    A --> B
+    subgraph S
+        B
+    end
+@@@ 106-repro-multiline-quoted-label
+flowchart LR
+    A["line one
+line two"] --> B
+@@@ 107-repro-multiline-shape-data
+flowchart LR
+    A@{
+      shape: cyl
+      label: "Orders DB"
+    }
+    A --> B
+@@@ 108-repro-unicode-id
+flowchart LR
+    Prüfung --> Ergebnis
+@@@ 109-repro-entities
+flowchart LR
+    A["I #9829; it #amp; you"] --> B
+@@@ 110-repro-markdown-subgraph-title
+flowchart LR
+    subgraph S["`**Backend**`"]
+        A
+    end
+@@@ 111-repro-italic-markdown
+flowchart LR
+    A["`*draft* only`"] --> B
+@@@ 112-repro-rl-undirected
+flowchart RL
+    A --- B
+    B --- C
+@@@ 113-repro-lr-fanout
+flowchart LR
+    A --> B & C & D & E & F
+@@@ 114-repro-td-fanout
+flowchart TD
+    A --> B & C & D & E & F & G
+@@@ 115-repro-subgraph-direction-wins
+flowchart LR
+    subgraph S
+        direction TB
+        A --> B --> C
+    end
+    S --> D
+@@@ 116-repro-accdescr-block
+flowchart LR
+    accDescr {
+        two words
+    }
+    A --> B
+@@@ 117-repro-labelless-shape-label
+flowchart LR
+    A@{ shape: bolt, label: "Signal" } --> B
+@@@ 118-repro-flag-paper-tape
+flowchart LR
+    A@{ shape: flag, label: "Tape" } --> B
+@@@ 119-repro-empty-subgraph
+flowchart LR
+    subgraph Later["Coming soon"]
+    end
+    A --> B
+@@@ 120-repro-named-fill
+flowchart LR
+    A --> B
+    style A fill:lightblue
+@@@ 121-repro-dashes-inside-quoted-label
+flowchart LR
+    A["Step 1 -- prepare"] --> B[Done]
+@@@ 122-repro-bare-End-line
+flowchart TD
+    subgraph S
+        Start
+        End
+        Start --> End
+        Mid
+    end
+@@@ 123-repro-arrow-in-quoted-label
+flowchart LR
+    A["map -- key --> value"] --> B
+@@@ 124-repro-subgraph-style
+flowchart LR
+    subgraph S
+        A
+    end
+    style S fill:#eef
+@@@ 201-state-order-lifecycle
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Confirmed : payment received
+    Pending --> Cancelled : timeout
+    Confirmed --> Shipped : dispatch
+    Shipped --> Delivered : signed for
+    Delivered --> [*]
+    Cancelled --> [*]
+@@@ 202-state-traffic-light
+stateDiagram
+    [*] --> Red
+    Red --> Green : after 30s
+    Green --> Yellow : after 25s
+    Yellow --> Red : after 5s
+@@@ 203-state-composite-auth
+stateDiagram-v2
+    [*] --> LoggedOut
+    LoggedOut --> Authenticating : submit credentials
+    state Authenticating {
+        [*] --> CheckPassword
+        CheckPassword --> CheckMFA : password ok
+        CheckMFA --> [*] : code ok
+        CheckPassword --> [*] : wrong password
+    }
+    Authenticating --> LoggedIn : success
+    Authenticating --> LoggedOut : failure
+    LoggedIn --> LoggedOut : logout
+@@@ 204-state-nested-composites
+stateDiagram-v2
+    [*] --> First
+    state First {
+        [*] --> Second
+        state Second {
+            [*] --> second
+            second --> Third
+            state Third {
+                [*] --> third
+                third --> [*]
+            }
+        }
+    }
+    First --> [*]
+@@@ 205-state-choice
+stateDiagram-v2
+    state if_state <<choice>>
+    [*] --> IsPositive
+    IsPositive --> if_state
+    if_state --> False : if n < 0
+    if_state --> True : if n >= 0
+    False --> [*]
+    True --> [*]
+@@@ 206-state-fork-join
+stateDiagram-v2
+    state fork_state <<fork>>
+    [*] --> fork_state
+    fork_state --> BuildFrontend
+    fork_state --> BuildBackend
+    fork_state --> RunLinters
+
+    state join_state <<join>>
+    BuildFrontend --> join_state
+    BuildBackend --> join_state
+    RunLinters --> join_state
+    join_state --> Deploy
+    Deploy --> [*]
+@@@ 207-state-notes-single-and-multi
+stateDiagram-v2
+    [*] --> Draft
+    Draft --> Review : submit
+    Review --> Published : approve
+    Review --> Draft : request changes
+    Published --> Archived : after 1 year
+    note right of Draft : Only the author can edit
+    note left of Review
+        Two reviewers must approve.
+        The author cannot approve their own post.
+    end note
+    Archived --> [*]
+@@@ 208-state-long-names
+stateDiagram-v2
+    state "Waiting for customer reply" as WaitCustomer
+    state "Escalated to tier 2" as Tier2
+    state "Resolved & closed" as Closed
+    [*] --> New
+    New --> WaitCustomer : agent replied
+    WaitCustomer --> New : customer replied
+    New --> Tier2 : escalate
+    Tier2 --> Closed : fixed
+    New --> Closed : fixed
+    Closed --> [*]
+@@@ 209-state-descriptions
+stateDiagram-v2
+    Idle : Waiting for input
+    Processing : Crunching numbers
+    Processing : May take a while
+    Error : Something went wrong
+    [*] --> Idle
+    Idle --> Processing : start
+    Processing --> Idle : done
+    Processing --> Error : exception
+    Error --> Idle : reset
+@@@ 210-state-direction-lr
+stateDiagram-v2
+    direction LR
+    [*] --> Locked
+    Locked --> Unlocked : coin
+    Unlocked --> Locked : push
+    Locked --> Locked : push
+    Unlocked --> Unlocked : coin
+@@@ 211-state-concurrency
+stateDiagram-v2
+    [*] --> Active
+    state Active {
+        [*] --> NumLockOff
+        NumLockOff --> NumLockOn : EvNumLockPressed
+        NumLockOn --> NumLockOff : EvNumLockPressed
+        --
+        [*] --> CapsLockOff
+        CapsLockOff --> CapsLockOn : EvCapsLockPressed
+        CapsLockOn --> CapsLockOff : EvCapsLockPressed
+        --
+        [*] --> ScrollLockOff
+        ScrollLockOff --> ScrollLockOn : EvScrollLockPressed
+        ScrollLockOn --> ScrollLockOff : EvScrollLockPressed
+    }
+@@@ 212-state-classdef
+stateDiagram-v2
+    classDef good fill:#d4edda,stroke:#28a745,color:#155724
+    classDef bad fill:#f8d7da,stroke:#dc3545,color:#721c24
+    classDef neutral fill:lightyellow
+    [*] --> Pending
+    Pending --> Approved
+    Pending --> Rejected
+    Approved --> [*]
+    Rejected --> [*]
+    class Approved good
+    class Rejected bad
+    class Pending neutral
+@@@ 213-state-inline-class
+stateDiagram-v2
+    classDef running fill:#cce5ff,stroke:#004085
+    classDef stopped fill:#e2e3e5
+    [*] --> Created
+    Created --> Running:::running : start
+    Running --> Stopped:::stopped : stop
+    Stopped --> Running : restart
+    Stopped --> [*] : remove
+@@@ 214-state-tcp
+stateDiagram-v2
+    [*] --> CLOSED
+    CLOSED --> LISTEN : passive open
+    CLOSED --> SYN_SENT : active open / send SYN
+    LISTEN --> SYN_RCVD : recv SYN / send SYN+ACK
+    SYN_SENT --> ESTABLISHED : recv SYN+ACK / send ACK
+    SYN_RCVD --> ESTABLISHED : recv ACK
+    ESTABLISHED --> FIN_WAIT_1 : close / send FIN
+    ESTABLISHED --> CLOSE_WAIT : recv FIN / send ACK
+    FIN_WAIT_1 --> FIN_WAIT_2 : recv ACK
+    FIN_WAIT_2 --> TIME_WAIT : recv FIN / send ACK
+    CLOSE_WAIT --> LAST_ACK : close / send FIN
+    LAST_ACK --> CLOSED : recv ACK
+    TIME_WAIT --> CLOSED : timeout
+@@@ 215-state-composite-with-long-name
+stateDiagram-v2
+    [*] --> Browsing
+    state "Checkout process" as Checkout {
+        [*] --> Cart
+        Cart --> Shipping : next
+        Shipping --> Payment : next
+        Payment --> [*] : pay
+    }
+    Browsing --> Checkout : checkout
+    Checkout --> Confirmation
+    Confirmation --> [*]
+@@@ 216-state-choice-in-composite
+stateDiagram-v2
+    [*] --> Validate
+    state Validate {
+        [*] --> Parse
+        state valid <<choice>>
+        Parse --> valid
+        valid --> Accept : schema ok
+        valid --> Reject : schema error
+        Accept --> [*]
+        Reject --> [*]
+    }
+    Validate --> Store
+    Store --> [*]
+@@@ 217-state-fenced-llm
+Here is the state machine for the vending machine:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> HasCoin : insert coin
+    HasCoin --> Idle : refund
+    HasCoin --> Dispensing : select item
+    Dispensing --> Idle : item taken
+    note right of Dispensing : Motor runs for 2s
+```
+
+The machine always returns to Idle.
+@@@ 218-state-composite-direction
+stateDiagram-v2
+    direction LR
+    [*] --> Pipeline
+    state Pipeline {
+        direction TB
+        [*] --> Fetch
+        Fetch --> Decode
+        Decode --> Execute
+        Execute --> Writeback
+        Writeback --> [*]
+    }
+    Pipeline --> Halted : halt instruction
+    Halted --> [*]
+@@@ 219-state-style-and-comments
+stateDiagram-v2
+    %% Door controller
+    [*] --> Closed
+    Closed --> Opening : button
+    Opening --> Open : fully open
+    Open --> Closing : timeout
+    Closing --> Closed : fully closed
+    Closing --> Opening : obstacle detected
+    style Open fill:#9f9,stroke:#060
+    style Closed fill:#f99
+@@@ 220-state-front-matter-title
+---
+title: Job runner states
+---
+stateDiagram-v2
+    [*] --> Queued
+    Queued --> Running : worker picks up
+    Running --> Succeeded : exit 0
+    Running --> Failed : exit != 0
+    Failed --> Queued : retry (max 3)
+    Succeeded --> [*]
+    Failed --> [*] : give up
+@@@ 221-state-notes-on-composite
+stateDiagram-v2
+    [*] --> Connected
+    state Connected {
+        [*] --> Idle
+        Idle --> Busy : request
+        Busy --> Idle : response
+    }
+    Connected --> Disconnected : socket closed
+    Disconnected --> Connected : reconnect
+    note right of Connected
+        Heartbeat every 30s
+    end note
+    note left of Disconnected : Backoff 1s, 2s, 4s
+@@@ 222-state-fork-in-composite-and-choice
+stateDiagram-v2
+    state Deploy {
+        state fork1 <<fork>>
+        state join1 <<join>>
+        [*] --> fork1
+        fork1 --> MigrateDB
+        fork1 --> WarmCache
+        MigrateDB --> join1
+        WarmCache --> join1
+        join1 --> [*]
+    }
+    state ok <<choice>>
+    [*] --> Build
+    Build --> ok
+    ok --> Deploy : green
+    ok --> Fix : red
+    Fix --> Build
+    Deploy --> [*]
+@@@ 301-block-simple-columns
+block-beta
+  columns 3
+  a b c
+  d e f
+@@@ 302-block-spans
+block-beta
+  columns 4
+  Header["Page header"]:4
+  Nav["Navigation"]:1 Main["Main content"]:3
+  Footer["Footer"]:4
+@@@ 303-block-space
+block-beta
+  columns 3
+  A space B
+  space C space
+  D space E
+@@@ 304-block-nested
+block-beta
+  columns 3
+  Frontend["Frontend"]
+  block:backend:2
+    columns 2
+    API["API server"] Worker["Worker"]
+    DB[("Postgres")] Cache[("Redis")]
+  end
+  Frontend --> API
+  API --> DB
+  Worker --> Cache
+@@@ 305-block-arrows
+block-beta
+  columns 5
+  Input["Raw data"] arr1<["parse"]>(right) Parser["Parser"] arr2<["emit"]>(right) Output["AST"]
+@@@ 306-block-edges-labels
+block-beta
+  columns 3
+  Client["Client"] space Server["Server"]
+  space space DB[("Database")]
+  Client -- "HTTPS" --> Server
+  Server -- "SQL" --> DB
+@@@ 307-block-styles
+block-beta
+  columns 2
+  ok["Healthy"] warn["Degraded"]
+  down["Down"] unknown["Unknown"]
+  style ok fill:#9f9,stroke:#060
+  style warn fill:#ff9,stroke:#990
+  style down fill:#f99,stroke:#900,stroke-width:3px
+  classDef grey fill:#ddd,color:#555
+  class unknown grey
+@@@ 308-block-cpu
+block-beta
+  columns 4
+  PC["PC"] IMEM["Instruction memory"]:2 IR["IR"]
+  RF["Register file"]:2 ALU{{"ALU"}} DMEM[("Data memory")]
+  PC --> IMEM
+  IMEM --> IR
+  IR --> RF
+  RF --> ALU
+  ALU --> DMEM
+@@@ 309-block-shapes
+block-beta
+  columns 4
+  a["square"] b("round") c(["stadium"]) d[["subroutine"]]
+  e[("cylinder")] f(("circle")) g{"diamond"} h{{"hexagon"}}
+  i[/"lean right"/] j[\"lean left"\] k[/"trapezoid"\] l>"flag"]
+@@@ 310-block-nested-two-levels
+block-beta
+  columns 1
+  block:cloud
+    columns 2
+    block:vpc1
+      columns 1
+      web1["web-1"]
+      web2["web-2"]
+    end
+    block:vpc2
+      columns 1
+      db1[("db-primary")]
+      db2[("db-replica")]
+    end
+  end
+  users["Users"]
+  users --> web1
+  web1 --> db1
+  db1 --> db2
+@@@ 311-block-anonymous-blocks
+block-beta
+  columns 2
+  block
+    a1["Alpha"]
+    a2["Beta"]
+  end
+  block
+    b1["Gamma"]
+    b2["Delta"]
+  end
+  a1 --> b1
+@@@ 312-block-network-stack
+block-beta
+  columns 1
+  app["Application (HTTP, gRPC)"]
+  transport["Transport (TCP, UDP)"]
+  network["Network (IP)"]
+  link["Link (Ethernet, Wi-Fi)"]
+  app --> transport
+  transport --> network
+  network --> link
+@@@ 313-block-arrow-directions
+block-beta
+  columns 3
+  space up<["  "]>(up) space
+  left<["  "]>(left) center["Hub"] right<["  "]>(right)
+  space down<["  "]>(down) space
+@@@ 314-block-dashboard-grid
+block-beta
+  columns 6
+  title["Sales dashboard"]:6
+  kpi1["Revenue"]:2 kpi2["Orders"]:2 kpi3["Churn"]:2
+  chart["Monthly trend"]:4 table["Top customers"]:2
+  space:2 note["Updated hourly"]:2 space:2
+  style title fill:#333,color:#fff
+@@@ 315-block-fenced-with-comment
+Here's the memory layout as a block diagram:
+
+```mermaid
+block-beta
+  %% Address space, low to high
+  columns 1
+  text[".text (code)"]
+  data[".data"]
+  bss[".bss"]
+  heap["heap ↓"]
+  space
+  stack["stack ↑"]
+```
+@@@ 401-arch-icons-new-shapes
+flowchart LR
+    user@{ icon: "fa:user", form: "circle", label: "Customer" }
+    browser@{ shape: browser, label: "Web app" }
+    cdn@{ shape: cloud, label: "CDN" }
+    api@{ shape: rect, label: "API gateway" }
+    bucket@{ shape: bucket, label: "S3 assets" }
+    db@{ shape: datastore, label: "Orders DB" }
+    user --> browser --> cdn --> api
+    cdn --> bucket
+    api --> db
+@@@ 402-classdef-named-colours
+flowchart TD
+    A[Start] --> B{Is it valid?}
+    B -->|Yes| C[Process]
+    B -->|No| D[Reject]
+    C --> E[Done]
+    D --> E
+    classDef start fill:lightgreen,stroke:darkgreen,stroke-width:2px
+    classDef decision fill:lightyellow,stroke:orange
+    classDef error fill:salmon,stroke:darkred,color:white
+    class A,E start
+    class B decision
+    class D error
+@@@ 403-er-ish-circle-cross
+flowchart LR
+    Customer --o Order
+    Order --o LineItem
+    LineItem --x Product
+    Product o--o Category
+    Supplier x--x Product
+@@@ 404-styled-pipeline-dasharray
+flowchart LR
+    src[Source] --> build[Build] --> test[Test] --> deploy[Deploy]
+    test -.-> flaky[Flaky test quarantine]
+    style src fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    style build fill:#fff3e0,stroke:#ef6c00
+    style test fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    style flaky fill:#fce4ec,stroke:#c2185b,stroke-dasharray: 5 5
+    style deploy fill:#ede7f6,stroke:#4527a0,stroke-width:4px
+@@@ 405-subgraph-styles-classes
+flowchart TB
+    subgraph frontend [Frontend]
+        ui[React UI]
+        state[Redux store]
+    end
+    subgraph backend [Backend]
+        api[REST API]
+        jobs[Job queue]
+    end
+    ui --> api
+    state --> ui
+    api --> jobs
+    style frontend fill:#e3f2fd,stroke:#1565c0
+    style backend fill:#f3e5f5,stroke:#6a1b9a,color:#4a148c
+    classDef svc fill:#fff,stroke:#333,stroke-width:2px
+    class api,jobs svc
+@@@ 406-long-links-mixed
+flowchart TD
+    A[Request] --> B[Auth]
+    B ---> C[Rate limit]
+    C ----> D[Handler]
+    A -.-> L[Logger]
+    B -..-> L
+    D ===> R[Response]
+    A ~~~ R
+@@@ 407-comments-init-click
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#ffcc00'}}}%%
+flowchart LR
+    %% Entry points
+    home[Home page] --> docs[Docs]
+    home --> blog[Blog]
+    %% Outbound links
+    docs --> gh[GitHub]
+    click docs "https://example.com/docs" "Open the docs"
+    click gh href "https://github.com" _blank
+@@@ 408-acc-and-front-matter-config
+---
+title: Incident response
+config:
+  look: handDrawn
+  flowchart:
+    curve: linear
+---
+flowchart TD
+    accTitle: Incident response flow
+    accDescr: How an alert becomes a resolved incident
+    alert[Alert fires] --> triage{Sev 1?}
+    triage -->|yes| page[Page on-call]
+    triage -->|no| ticket[Open ticket]
+    page --> fix[Mitigate]
+    ticket --> fix
+@@@ 409-linkstyle-default-and-indexed
+flowchart LR
+    A --> B --> C --> D
+    A --> D
+    linkStyle default stroke:gray,stroke-width:1px
+    linkStyle 3 stroke:red,stroke-width:3px
+@@@ 410-new-shapes-docs
+flowchart TD
+    req@{ shape: docs, label: "Requirements" }
+    spec@{ shape: lin-doc, label: "Spec" }
+    tagged@{ shape: tag-doc, label: "Tagged doc" }
+    review@{ shape: notch-rect, label: "Review card" }
+    sign@{ shape: tag-rect, label: "Sign-off" }
+    arch@{ shape: div-rect, label: "Architecture" }
+    req --> spec --> tagged --> review --> sign --> arch
+@@@ 411-new-shapes-flowchart-symbols
+flowchart LR
+    start@{ shape: sm-circ }
+    input@{ shape: sl-rect, label: "Manual input" }
+    disp@{ shape: curv-trap, label: "Display" }
+    loop@{ shape: notch-pent, label: "Loop limit" }
+    col@{ shape: hourglass, label: "Collate" }
+    file@{ shape: flip-tri, label: "Manual file" }
+    j@{ shape: f-circ }
+    stop@{ shape: fr-circ }
+    start --> input --> disp --> loop --> col --> file --> j --> stop
+@@@ 412-storage-shapes
+flowchart LR
+    app[App server] --> disk@{ shape: lin-cyl, label: "Disk" }
+    app --> mem@{ shape: win-pane, label: "Internal storage" }
+    app --> stored@{ shape: bow-rect, label: "Stored data" }
+    app --> folder@{ shape: folder, label: "Uploads" }
+    app --> cons@{ shape: console, label: "Admin console" }
+    app --> lined@{ shape: lin-rect, label: "Lined process" }
+@@@ 413-braces-bolt-notes
+flowchart LR
+    svc[Service] --> q[(Queue)]
+    q --> w[Worker]
+    note1@{ shape: brace, label: "Retries 3x" }
+    note2@{ shape: brace-r, label: "At-least-once" }
+    note3@{ shape: braces, label: "Idempotent" }
+    zap@{ shape: bolt }
+    w -.- note1
+    q -.- note2
+    svc -.- note3
+    w --> zap
+@@@ 414-icons-and-images
+flowchart TD
+    dev@{ icon: "fa:laptop", form: "square", label: "Developer" }
+    repo@{ icon: "fa:code-branch", label: "Repository" }
+    ci@{ icon: "fa:gear", form: "rounded", label: "CI" }
+    logo@{ img: "https://example.com/logo.png", label: "Registry", pos: "b", w: 60, h: 60, constraint: "on" }
+    dev --> repo --> ci --> logo
+@@@ 415-person-and-cloud-arch
+flowchart LR
+    alice@{ shape: person, label: "Alice" }
+    bob@{ shape: person, label: "Bob" }
+    internet@{ shape: cloud, label: "Internet" }
+    fw{{Firewall}}
+    lb[Load balancer]
+    alice --> internet
+    bob --> internet
+    internet --> fw --> lb
+    lb --> s1[Server 1] & s2[Server 2]
+    classDef ext fill:#eee,stroke:#999,stroke-dasharray:3 3
+    class alice,bob,internet ext
+@@@ 416-classdef-multiple-per-node
+flowchart LR
+    A:::critical --> B:::normal
+    B --> C
+    class A highlighted
+    classDef critical fill:#ffcccc,stroke:#cc0000
+    classDef highlighted stroke-width:4px
+    classDef normal fill:#ccffcc
+    class C critical
+@@@ 417-classdef-default
+flowchart TD
+    classDef default fill:#f9f9f9,stroke:#666,stroke-width:1px,color:#222
+    classDef accent fill:#ffd54f,stroke:#f57f17
+    A[Plan] --> B[Build] --> C[Measure] --> D[Learn]
+    D --> A
+    class C accent
+@@@ 418-er-ish-with-labels
+flowchart LR
+    User -- "1..*" --o Account
+    Account -- owns --o Wallet
+    Wallet x-- "frozen" --x Transaction
+    Account o-- "0..1" --o Profile
+@@@ 419-edge-ids-animate-with-styles
+flowchart LR
+    A[Producer] e1@--> B[Broker]
+    B e2@--> C[Consumer]
+    e1@{ animate: true }
+    e2@{ animation: slow }
+    style A fill:#bbf,stroke:#33f
+    style C fill:#bfb,stroke:#3a3
+@@@ 420-color-only-styles
+flowchart TD
+    A[Warning] --> B[Error]
+    B --> C[Info]
+    style A color:orange
+    style B color:red,font-weight:bold
+    style C color:#0366d6
+@@@ 421-thick-and-dotted-with-marks
+flowchart LR
+    A ==o B
+    B -.-o C
+    C ==x D
+    D -.-x E
+    E <==> F
+    F <-.-> A
+@@@ 422-subgraph-style-only-stroke
+flowchart LR
+    subgraph aws [AWS us-east-1]
+        direction TB
+        ec2[EC2]
+        rds[(RDS)]
+    end
+    subgraph gcp [GCP europe-west1]
+        gke[GKE]
+    end
+    ec2 --> rds
+    ec2 -.->|VPN| gke
+    style aws stroke:#ff9900,stroke-width:2px
+    style gcp stroke:#4285f4,stroke-dasharray: 4 2
+@@@ 423-llm-fenced-styled-arch
+Here's an architecture diagram with colour-coded tiers:
+
+```mermaid
+flowchart TB
+    subgraph Presentation
+        web[Web]
+        mobile[Mobile]
+    end
+    subgraph Logic
+        svc1[Orders]
+        svc2[Billing]
+    end
+    subgraph Data
+        pg[(Postgres)]
+        s3@{ shape: bucket, label: "S3" }
+    end
+    web & mobile --> svc1
+    svc1 --> svc2
+    svc1 --> pg
+    svc2 --> s3
+    classDef tier1 fill:#bbdefb,stroke:#0d47a1
+    classDef tier2 fill:#c8e6c9,stroke:#1b5e20
+    classDef tier3 fill:#ffe0b2,stroke:#e65100
+    class web,mobile tier1
+    class svc1,svc2 tier2
+    class pg,s3 tier3
+```
+
+Blue is the client tier, green the services and orange storage.
+@@@ 424-stroke-width-units
+flowchart LR
+    a[Thin] --> b[Medium] --> c[Thick]
+    style a stroke-width:1px
+    style b stroke-width:2.5px,stroke:#000
+    style c stroke-width:5px,stroke:navy,fill:aliceblue
+@@@ 425-click-callback-and-tooltip
+flowchart LR
+    A[Dashboard] --> B[Reports]
+    A --> C[Settings]
+    click A callback "Go to dashboard"
+    click B "https://example.com/reports" "Open reports" _blank
+    click C href "https://example.com/settings"
+@@@ 426-kitchen-sink-styles
+flowchart LR
+    %% Legend
+    in[/Input/]:::io --> p1[Validate]:::proc
+    p1 --> dec{OK?}:::decision
+    dec -->|yes| p2[[Transform]]:::proc
+    dec -->|no| err>Error]:::error
+    p2 --> out[/Output/]:::io
+    classDef io fill:#e0f7fa,stroke:#006064
+    classDef proc fill:white,stroke:black,stroke-width:2px
+    classDef decision fill:gold,stroke:goldenrod
+    classDef error fill:tomato,color:white,stroke-dasharray:2 2
+    linkStyle 3 stroke:tomato,stroke-width:2px
+@@@ 501-repro-linkstyle-default-plus-indexed
+flowchart LR
+    A --> B --> C
+    linkStyle default stroke:#999,stroke-dasharray:4 2
+    linkStyle 1 stroke:red
+@@@ 502-repro-class-on-subgraph
+flowchart LR
+    subgraph S [Secure zone]
+        A[Vault]
+    end
+    B[Client] --> A
+    classDef zone fill:#fee,stroke:#c00
+    class S zone
+@@@ 503-repro-block-label-with-arrow
+block-beta
+  columns 2
+  a["in --> out"] b["Next"]
+  a --> b
+@@@ 504-repro-state-init-acc
+%%{init: {'theme': 'forest'}}%%
+stateDiagram-v2
+    accTitle: Light switch
+    accDescr: Two states and a toggle
+    [*] --> Off
+    Off --> On : toggle
+    On --> Off : toggle
+@@@ 505-repro-state-first-seen-in-composite
+stateDiagram-v2
+    [*] --> Comp
+    state Comp {
+        [*] --> A
+        A --> Outside : escape
+    }
+    Outside --> [*]
+@@@ 506-repro-block-span-overflow
+block-beta
+  columns 3
+  a b
+  c:2
+  d e f
+@@@ 507-repro-img-icon-props
+flowchart LR
+    i1@{ icon: "fa:database", form: "circle", label: "DB", pos: "b", h: 48 }
+    i2@{ img: "https://example.com/a.png", label: "Logo", pos: "t", w: 80, h: 40, constraint: "on" }
+    i1 --> i2
+@@@ 508-repro-thick-linkstyle-dash
+flowchart LR
+    A ==> B
+    B --> C
+    linkStyle 0 stroke-dasharray:3 3
+@@@ 509-repro-state-transition-class-and-desc
+stateDiagram-v2
+    classDef hot fill:#f99
+    [*] --> A
+    A --> B:::hot
+    B : warm up
+    B --> [*]
+@@@ 510-repro-block-classdef-on-nested
+block-beta
+  columns 2
+  block:g1
+    x["X"] y["Y"]
+  end
+  z["Z"]
+  classDef grp fill:#eef
+  class g1 grp
+  style z stroke:#f00,stroke-width:3px
+@@@ 511-repro-state-accdescr-block
+stateDiagram-v2
+    accDescr {
+        Overview
+    }
+    [*] --> Ready
+    Ready --> Done
+@@@ 512-repro-state-lr-composite
+stateDiagram-v2
+    direction LR
+    [*] --> Setup
+    state Setup {
+        Fetch --> Configure
+        Configure --> Verify
+    }
+    Setup --> Running

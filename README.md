@@ -230,6 +230,8 @@ real Word.
 | `taskpane.html` | UI shell and every Office.js call |
 | `icon.svg` | The add-in icon; `icon-32.png` / `icon-64.png` are it exported at those sizes for the manifest |
 | `test.js` | `node test.js`: Mermaid in and out without a browser (what LLMs write, round trips, pasted-diagram layout, label escaping) |
+| `dev/stress/` | The tool against real Mermaid 11.17.2 on ~190 LLM-style diagrams (`node run.js`; setup in `CLAUDE.md`) |
+| `dev/visual/` | Picture-quality checks over the same diagrams (`node check.js`) |
 
 ### Every time you push
 

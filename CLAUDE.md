@@ -24,7 +24,24 @@ small line-based parser for the flowchart subset we write plus the common
 things LLMs write. Anything the tool writes is checked against the real
 Mermaid 11 parser and renderer. `node test.js` checks the reader, the writer
 and the layout of pasted diagrams without a browser; run it after touching
-`diagram.js`.
+`diagram.js`. Two heavier checks live in `dev/` (one-time setup:
+`npm i --prefix dev playwright mermaid@11.17.2`):
+
+- `dev/stress`: about 190 diagrams written the way LLMs write them
+  (`corpus.txt`; `node split.js` writes `corpus/`). `node run.js [-v] [name]`
+  reads each with the tool and with real Mermaid 11.17.2 in headless Chromium
+  and compares blocks, links, labels, shapes, groups, styles, classes, state
+  and block-beta structure, then checks the tool's output is valid Mermaid that
+  Mermaid reads the same way and that a round trip is stable. Run it after
+  touching the reader or writer; add a corpus entry for every bug found.
+- `dev/visual`: `node check.js` lays out and routes every corpus diagram and
+  scores what makes a picture hard to read: connectors through or along
+  blocks, shared lanes, connector text on blocks or other text, text
+  overflowing its shape, very wide pictures. It writes the worst as PNGs to
+  `worst/`. Run it after touching layout or routing.
+
+Known differences, on purpose: an empty subgraph is dropped; block-beta arrow
+blocks are plain blocks; state `--` regions are not drawn.
 
 ## Style
 

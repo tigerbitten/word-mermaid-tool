@@ -567,6 +567,7 @@ function drawGroup(parent, g) {
   // A subgraph's own colours: its fill, and its border carried into the tab.
   if (g.fill) box.style.fill = g.fill;
   if (g.stroke) { box.style.stroke = g.stroke; tab.style.fill = g.stroke; }
+  if (g.strokeWidth) box.style.strokeWidth = g.strokeWidth;
   title.textContent = g.label;
   return node;
 }

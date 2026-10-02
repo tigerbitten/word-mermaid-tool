@@ -123,7 +123,7 @@ check('pin names kept, and said for an LLM', d.edges[0].fromPort === 'rs 1' && d
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&
   d.nodes.find((n) => n.id === 'start_root').shape === 'start' && d.nodes.find((n) => n.id === 'end_root').shape === 'stop' &&
-  d.nodes.find((n) => n.id === 'Idle').label === 'Idle\nwaiting', [ids(d), edges(d)]);
+  d.nodes.find((n) => n.id === 'Idle').label === 'waiting', [ids(d), edges(d)]);
 d = parseMermaid('block-beta\n  columns 3\n  a b:2\n  c space d\n  a --> d');
 check('a block diagram keeps its grid', at2(d, 'a').y === at2(d, 'b').y && at2(d, 'c').y > at2(d, 'a').y && at2(d, 'd').x > at2(d, 'b').x &&
   at2(d, 'b').w > at2(d, 'a').w && edges(d) === 'a>d', d.nodes.map((n) => [n.id, n.x, n.y, n.w]));
