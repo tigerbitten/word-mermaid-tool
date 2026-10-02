@@ -773,6 +773,9 @@ function applyLayout(d, layout) {
     const l = layout[n.id];
     if (l) Object.assign(n, l); else unplaced.push(n);
   }
+  // Sized to their text where text can be measured (render.js, in the pane;
+  // not in `node test.js`, which keeps the default size).
+  if (typeof sizeForLabel === 'function') unplaced.forEach(sizeForLabel);
   if (unplaced.length === d.nodes.length) {
     const grouped = new Set(d.groups.flatMap((g) => g.members));
     layoutBlock(d, d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40);

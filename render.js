@@ -86,6 +86,11 @@ function labelArea(n) {
   if (n.shape === 'stacked') return { x, y: y + 8, w: w - 8, h: h - 8 };
   if (n.shape === 'queue') { const r = Math.min(12, w / 6); return { x, y, w: w - r * 1.5, h }; }
   if (n.shape === 'buffer') return { x, y: y + h * 0.2, w: w * 0.65, h: h * 0.6 };
+  // Sloping or round sides: the text has to stay inside them, not the box.
+  if (n.shape === 'diamond') return { x: x + w / 4, y: y + h / 4, w: w / 2, h: h / 2 };
+  if (['circle', 'doublecircle'].includes(n.shape)) return { x: x + w * 0.15, y: y + h * 0.15, w: w * 0.7, h: h * 0.7 };
+  if (n.shape === 'hexagon') { const i = Math.min(18, w * 0.2); return { x: x + i, y, w: w - 2 * i, h }; }
+  if (/^(parallelogram|trapezoid)/.test(n.shape)) { const sl = Math.min(20, w * 0.2); return { x: x + sl, y, w: w - 2 * sl, h }; }
   return n;
 }
 
@@ -94,15 +99,32 @@ function labelArea(n) {
 function fitNodeSize(n) {
   if (LABELLESS.has(n.shape)) return;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
-  const area = labelArea(n);
-  // Extra room the shape's own outline takes out of the box, added back on.
-  const slackW = n.w - area.w;
-  const slackH = n.h - area.h;
-  const lines = wrapLabel(n.label, Math.max(60, area.w - LABEL_PAD_X * 2), size, n.bold);
-  const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size, n.bold)), 0)) + LABEL_PAD_X * 2 + slackW;
-  const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2 + slackH;
-  n.w = Math.max(n.w, needW, 60);
-  n.h = Math.max(n.h, needH, 36);
+  // A few rounds: for a diamond the outline's share of the box grows with the
+  // box, so one round of growing still leaves it short.
+  for (let round = 0; round < 4; round++) {
+    const area = labelArea(n);
+    // Extra room the shape's own outline takes out of the box, added back on.
+    const slackW = n.w - area.w;
+    const slackH = n.h - area.h;
+    const lines = wrapLabel(n.label, Math.max(60, area.w - LABEL_PAD_X * 2), size, n.bold);
+    const needW = Math.ceil(Math.max(...lines.map((l) => textWidth(l, size, n.bold)), 0)) + LABEL_PAD_X * 2 + slackW;
+    const needH = lines.length * lineH(size) + LABEL_PAD_Y * 2 + slackH;
+    if (n.w >= needW && n.h >= needH) break;
+    n.w = Math.max(n.w, needW, 60);
+    n.h = Math.max(n.h, needH, 36);
+  }
+}
+
+// A block pasted in as Mermaid has no size of its own: wide enough that its
+// text takes about three lines (up to a limit), then tall enough for them.
+// The width is for the text: a diamond, whose text only has the middle half,
+// gets twice it, so it stays a diamond rather than a tall spike.
+function sizeForLabel(n) {
+  if (LABELLESS.has(n.shape) || !n.label) return;
+  const one = textWidth(n.label, n.fontSize || DEFAULT_FONT_SIZE, n.bold);
+  const textW = Math.min(240, one / 3 + LABEL_PAD_X * 2 + 20);
+  n.w = Math.max(n.w, Math.ceil(textW * n.w / labelArea(n).w / 10) * 10);
+  fitNodeSize(n);
 }
 
 // Returns the shape's elements in drawing order. Anything marked data-line is
@@ -368,13 +390,16 @@ function rayToOutline(n, from, dir) {
 
 // Which side a connector leaves `a` by for `b`: the side facing it. A
 // decision's branch to a block off to one side leaves from that side's corner,
-// the flowchart convention, rather than out of the bottom tip and round.
+// the flowchart convention, rather than off a sloping edge with a jog in it.
 function exitSide(a, b) {
   const side = facingSide(a, b);
   if (a.shape !== 'diamond') return side;
+  // Straight ahead means within the middle third; anything further out goes
+  // from the corner on its side.
   const c = centerOf(b);
-  if ((side === 'n' || side === 's') && (c.x < a.x || c.x > a.x + a.w)) return c.x > a.x ? 'e' : 'w';
-  if ((side === 'e' || side === 'w') && (c.y < a.y || c.y > a.y + a.h)) return c.y > a.y ? 's' : 'n';
+  const m = centerOf(a);
+  if ((side === 'n' || side === 's') && Math.abs(c.x - m.x) > a.w / 6) return c.x > m.x ? 'e' : 'w';
+  if ((side === 'e' || side === 'w') && Math.abs(c.y - m.y) > a.h / 6) return c.y > m.y ? 's' : 'n';
   return side;
 }
 
@@ -697,6 +722,19 @@ function edgeRoutes(d) {
   // out dead straight rather than with a small jog in it.
   for (const s of slots) {
     if (!s || s.self || s.straight) continue;
+    // An L: out of one side, turning once into the top or side of the other.
+    // An end alone on its side lands right under (or beside) the turn, so the
+    // connector bends once instead of jogging on its way in.
+    const vertical = (side) => side === 'n' || side === 's';
+    if (vertical(s.from.side) !== vertical(s.to.side)) {
+      for (const [end, far, n, other] of [[s.to, s.from, s.b, s.a], [s.from, s.to, s.a, s.b]]) {
+        if (!end.solo || end.pinned) continue;
+        const turn = stubOf(other, anchorPoint(other, far.side, far.t), far.side);
+        const [pos, len] = vertical(end.side) ? ['x', 'w'] : ['y', 'h'];
+        if (n[len] && turn[pos] >= n[pos] + 8 && turn[pos] <= n[pos] + n[len] - 8) { end.t = (turn[pos] - n[pos]) / n[len]; break; }
+      }
+      continue;
+    }
     const horiz = (s.from.side === 'e' && s.to.side === 'w') || (s.from.side === 'w' && s.to.side === 'e');
     const vert = (s.from.side === 's' && s.to.side === 'n') || (s.from.side === 'n' && s.to.side === 's');
     if (!horiz && !vert) continue;
