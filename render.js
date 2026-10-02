@@ -185,10 +185,10 @@ function sizeForLabel(n) {
 // wait for that, so it draws its own.
 const GLYPHS = [
   [/user|person|account|people|customer|admin|actor/, 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1'],
-  [/server|host|rack|vm\b|instance|compute/, 'M4 3h16v7H4zM4 14h16v7H4zM7.5 6.5h.01M7.5 17.5h.01'],
-  [/database|\bdb\b|sql|postgres|mongo|storage|table/, 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
+  [/server|host|rack|vm\b|instance|compute|ec2|ecs|fargate|droplet/, 'M4 3h16v7H4zM4 14h16v7H4zM7.5 6.5h.01M7.5 17.5h.01'],
+  [/database|\bdb\b|sql|postgres|mongo|storage|table|rds|aurora|dynamo|redis|cassandra|elastic|cosmos|bigquery|snowflake|warehouse/, 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
   [/cloud|aws|azure|gcp/, 'M7 19a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 9.5a4.7 4.7 0 0 1 0 9.5z'],
-  [/lock|secur|auth|password/, 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4M12 15v2'],
+  [/lock|secur|auth|password|iam|cognito|kms|vault|okta/, 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4M12 15v2'],
   [/key|token|secret/, 'M8 15a4 4 0 1 1 3.4-6.1L21 9v3h-3v3h-3l-1.6-1.6A4 4 0 0 1 8 15z'],
   [/globe|web|internet|world|earth|dns|cdn/, 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18'],
   [/gear|cog|setting|config/, 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8'],
@@ -207,15 +207,15 @@ const GLYPHS = [
   [/clock|time|schedul|cron|timer/, 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 3'],
   [/code|terminal|console|cli|bash|shell|git/, 'M8 7l-5 5 5 5M16 7l5 5-5 5'],
   [/bolt|lambda|function|serverless|flash|event|trigger/, 'M13 2L4 14h7l-1 8 9-12h-7z'],
-  [/network|sitemap|router|switch|load|balanc|gateway|proxy/, 'M10 3h4v4h-4zM3 17h4v4H3zM17 17h4v4h-4zM12 7v5M5 17v-5h14v5'],
+  [/network|sitemap|router|switch|load|balanc|gateway|proxy|\belb\b|\balb\b|nginx|vpc|route53/, 'M10 3h4v4h-4zM3 17h4v4H3zM17 17h4v4h-4zM12 7v5M5 17v-5h14v5'],
   [/plug|api|connect|integrat|webhook/, 'M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5'],
   [/robot|\bai\b|brain|ml\b|model|llm|bot|openai|anthropic/, 'M5 8h14v11H5zM12 4v4M9 13h.01M15 13h.01M9 16h6'],
   [/home|house/, 'M3 11l9-8 9 8M5 9v12h14V9'],
   [/warn|error|danger|exclam|bug/, 'M12 3L2 21h20zM12 10v5M12 18h.01'],
   [/check|success|done|ok\b|tick/, 'M4 12l5 5L20 6'],
   [/message|chat|comment|slack|sms/, 'M4 4h16v12H8l-4 4z'],
-  [/queue|list|log|stream|kafka|topic/, 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
-  [/box|package|container|docker|kube|k8s|pod|cube/, 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10'],
+  [/queue|list|log|stream|kafka|topic|sqs|sns|kinesis|pubsub|rabbit|eventbridge/, 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+  [/box|package|container|docker|kube|k8s|pod|cube|s3|blob|bucket|artifact/, 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10'],
 ];
 const IMAGE_GLYPH = 'M3 4h18v16H3zM3 16l5-5 4 4 3-3 6 6M15.5 8a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z';
 
