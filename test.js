@@ -38,6 +38,12 @@ check('markdown labels', d.nodes[0].label === 'Bold' && d.nodes[0].bold && d.nod
 d = parseMermaid('flowchart LR\n  A:::hot --> B\n  classDef hot fill:#f96\n  click A "https://x.y"\n  linkStyle default stroke:red');
 check('classDef, click and linkStyle default ignored', edges(d) === 'A>B' && ids(d) === 'A,B', [ids(d), edges(d)]);
 
+d = parseMermaid('Here is your diagram:\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nIt shows A feeding B.');
+check('a whole LLM reply gives its fenced diagram', edges(d) === 'A>B', edges(d));
+let refused = '';
+try { parseMermaid('sequenceDiagram\n  A->>B: hi'); } catch (e) { refused = e.message; }
+check('another diagram type is named when refused', /sequenceDiagram/.test(refused), refused);
+
 // Groups.
 d = parseMermaid('flowchart TB\n  subgraph Outer\n    subgraph Inner\n      A --> B\n    end\n    C\n  end\n  D --> Inner');
 const g = (id) => d.groups.find((x) => x.id === id);

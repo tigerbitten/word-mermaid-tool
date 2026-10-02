@@ -391,8 +391,14 @@ function looksLikeOurAltText(raw) {
   return typeof raw === 'string' && raw.trimStart().startsWith(FENCE_OPEN);
 }
 
+// The diagram inside a paste: a whole LLM reply ("Here's the diagram:
+// ```mermaid ... ``` It shows...") gives its first fenced block, alt text its
+// fence; bare Mermaid is taken as it is.
 function stripFence(raw) {
-  const lines = String(raw).replace(/\r\n?/g, '\n').split('\n');
+  const text = String(raw).replace(/\r\n?/g, '\n');
+  const block = text.match(/```[ \t]*(?:mermaid)?[ \t]*\n([\s\S]*?)\n[ \t]*```/);
+  if (block && !text.trimStart().startsWith('```')) return block[1];
+  const lines = text.split('\n');
   if (lines.length && lines[0].trim().startsWith('```')) lines.shift();
   while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
   if (lines.length && lines[lines.length - 1].trim() === '```') lines.pop();
@@ -701,7 +707,11 @@ function parseMermaid(text) {
   // The reader is lenient about everything else, which means without this any
   // stray sentence would parse as a block named after its first word. Mermaid
   // itself refuses a diagram with no header, so this refuses the same thing.
-  if (!sawHeader) throw new Error('expected a "flowchart LR" (or TD) line at the top');
+  if (!sawHeader) {
+    const other = (stripFence(text).match(/^\s*(sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|mindmap|timeline|journey|gitGraph|quadrantChart|requirementDiagram|sankey(?:-beta)?|xychart(?:-beta)?|block(?:-beta)?|packet(?:-beta)?|architecture(?:-beta)?|kanban|C4\w+)\b/m) || [])[1];
+    throw new Error(other ? `that's a ${other}: this tool draws flowcharts and block diagrams only (a first line like "flowchart LR")`
+      : 'expected a "flowchart LR" (or TD) line at the top');
+  }
 
   for (const n of d.nodes) {
     const decl = styles[n.id] || '';
