@@ -71,6 +71,7 @@ const SHAPES = {
   brace_r:           { v11: 'brace-r' },
   braces:            { v11: 'braces' },
   bolt:              { v11: 'bolt' },
+  paper_tape:        { v11: 'flag' },
   // The loose end of a free-standing line. Mermaid has no line without a node
   // at each end, so a loose end is an invisible, zero-size, label-less node --
   // written as an empty text node, which Mermaid also draws as nothing.
@@ -103,7 +104,8 @@ const V11_NAMES = {
   parallelogram_alt: ['lean-l', 'lean-left', 'out-in'],
   trapezoid: ['trap-b', 'trapezoid-bottom', 'priority', 'trapezoid'],
   trapezoid_alt: ['trap-t', 'trapezoid-top', 'manual', 'inv-trapezoid'],
-  flag: ['flag', 'paper-tape', 'odd'],
+  flag: ['odd'],
+  paper_tape: ['flag', 'paper-tape'],
   text: ['text'],
   document: ['doc', 'document'],
   stacked: ['st-rect', 'processes', 'procs', 'stacked-rectangle'],
@@ -215,7 +217,7 @@ const RESERVED_IDS = new Set(['end', 'subgraph', 'graph', 'flowchart', 'style', 
 // and then frozen -- renaming a node must not churn every edge that refers to
 // it, and must not break the saved text.
 function makeId(label, taken) {
-  let base = String(label || '').replace(/[^A-Za-z0-9_]/g, '');
+  let base = String(label || '').replace(/[^\p{L}\p{N}_]/gu, '');
   if (!base || /^[0-9]/.test(base) || RESERVED_IDS.has(base.toLowerCase())) base = 'n' + base;
   base = base.slice(0, 24);
   let id = base;
@@ -238,16 +240,19 @@ function quoteLabel(text) {
   return '"' + escaped + '"';
 }
 
+const ENTITIES = { amp: '&', nbsp: '\u00a0', apos: "'", copy: '©', reg: '®', deg: '°', plusmn: '±', times: '×', divide: '÷',
+  larr: '←', rarr: '→', uarr: '↑', darr: '↓', harr: '↔', hellip: '…', mdash: '—', ndash: '–', bull: '•', middot: '·',
+  le: '≤', ge: '≥', ne: '≠', infin: '∞', micro: 'µ', para: '¶', sect: '§', euro: '€', pound: '£', yen: '¥', cent: '¢',
+  trade: '™', hearts: '♥', check: '✓' };
+
 function unquoteLabel(raw) {
   let s = String(raw == null ? '' : raw).trim();
   if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') s = s.slice(1, -1);
+  // One pass, so a decoded `#` never starts another code: `#35;42;` is "#42;".
   return s
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/#quot;/g, '"')
-    .replace(/#124;/g, '|')
-    .replace(/#lt;/g, '<')
-    .replace(/#gt;/g, '>')
-    .replace(/#35;/g, '#');
+    .replace(/#(\w+);/g, (m, code) => /^\d+$/.test(code) ? String.fromCodePoint(+code)
+      : code === 'quot' ? '"' : code === 'lt' ? '<' : code === 'gt' ? '>' : ENTITIES[code] || m);
 }
 
 function nodeDecl(n) {
@@ -256,7 +261,7 @@ function nodeDecl(n) {
   // label, so "" would print "point" wherever the diagram is rendered.
   if (isPoint(n)) return n.id + '@{ shape: text, label: " " }';
   if (s.v11) {
-    return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
+    return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) && !n.label ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
   }
   return n.id + s.open + quoteLabel(n.label) + s.close;
 }
@@ -323,30 +328,47 @@ const cy = (n) => n.y + n.h / 2;
 // header is how Mermaid lays a diagram out and how an LLM reads its flow, so
 // one drawn top to bottom must not claim to run left to right.
 function flowDirection(d) {
-  let across = 0;
-  let down = 0;
-  let sx = 0;
-  let sy = 0;
+  // The group whose own `direction` lays out this block, if any: links inside
+  // one say how that group runs, not the diagram.
+  const ownDirection = (id) => {
+    let g = d.groups.find((x) => x.members.includes(id));
+    while (g && !g.direction) g = g.parent ? groupById(d, g.parent) : null;
+    return g;
+  };
+  let across = 0, down = 0, sx = 0, sy = 0;
+  const diagonal = [];
   for (const e of d.edges) {
     const a = endOf(d, e.from);
     const b = endOf(d, e.to);
     if (!a || !b || a === b) continue;
+    const own = ownDirection(e.from);
+    if (own && own === ownDirection(e.to)) continue;
     const dx = cx(b) - cx(a);
     const dy = cy(b) - cy(a);
     // Only a one-way arrow says which way things flow; the rest count for the
     // axis alone.
     const sign = e.head === 'end' ? 1 : 0;
-    // A link between blocks that share a column or a row says the axis; a
-    // diagonal one (a fan-out to a wide row) only half as surely.
-    const sameColumn = a.x < b.x + b.w && b.x < a.x + a.w;
-    const sameRow = a.y < b.y + b.h && b.y < a.y + a.h;
-    const weight = sameColumn || sameRow ? 1 : 0.5;
-    if (sameRow || (!sameColumn && Math.abs(dx) >= Math.abs(dy))) { across += weight; sx += Math.sign(dx) * sign; }
-    else { down += weight; sy += Math.sign(dy) * sign; }
+    // A link between blocks sharing a row or a column says the axis; a
+    // diagonal one (a fan-out to a wide row) is only counted when nothing else is.
+    if (a.y < b.y + b.h && b.y < a.y + a.h) { across++; sx += Math.sign(dx) * sign; }
+    else if (a.x < b.x + b.w && b.x < a.x + a.w) { down++; sy += Math.sign(dy) * sign; }
+    else diagonal.push([dx, dy, sign]);
   }
+  if (!across && !down) {
+    for (const [dx, dy, sign] of diagonal) {
+      if (Math.abs(dx) >= Math.abs(dy)) { across++; sx += Math.sign(dx) * sign; } else { down++; sy += Math.sign(dy) * sign; }
+    }
+  }
+  // Anything the drawing leaves open -- the axis, or which way along it --
+  // stays as the diagram was written.
+  const writtenAcross = d.direction === 'LR' || d.direction === 'RL';
   if (!across && !down) return d.direction;
-  if (down > across) return sy < 0 ? 'BT' : 'TD';
-  return sx < 0 ? 'RL' : 'LR';
+  if (down > across || (down === across && !writtenAcross)) {
+    if (sy) return sy < 0 ? 'BT' : 'TD';
+    return writtenAcross ? 'TD' : d.direction;
+  }
+  if (sx) return sx < 0 ? 'RL' : 'LR';
+  return writtenAcross ? d.direction : 'LR';
 }
 
 // The order a reader follows the drawing in, which is also the order Mermaid's
@@ -505,7 +527,7 @@ const BRACKETS = [
 // blocks are kept, and it draws nothing.
 // A link is a dash, dot or equals run with an optional head at either end
 // (`<`/`>` arrow, `o` circle, `x` cross), maybe named first (`e1@-->`).
-const LINK_RE = /^\s*(?:[A-Za-z0-9_]+@)?(~{3,}|[<ox]?(?:-\.+-|-{2,}|={2,})[>ox]?)\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/;
+const LINK_RE = /^\s*(?:[\p{L}\p{N}_]+@)?(~{3,}|[<ox]?(?:-\.+-|-{2,}|={2,})[>ox]?)\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/u;
 
 function linkFromToken(token) {
   return {
@@ -552,7 +574,7 @@ function readProps(body) {
 function readNodeRef(s, i) {
   while (i < s.length && /\s/.test(s[i])) i++;
   const start = i;
-  while (i < s.length && (/[A-Za-z0-9_]/.test(s[i]) || (s[i] === '-' && i > start && /[A-Za-z0-9_]/.test(s[i + 1] || '')))) i++;
+  while (i < s.length && (/[\p{L}\p{N}_]/u.test(s[i]) || (s[i] === '-' && i > start && /[\p{L}\p{N}_]/u.test(s[i + 1] || '')))) i++;
   if (i === start) return null;
   const id = s.slice(start, i);
 
@@ -585,12 +607,14 @@ function markdownLabel(label) {
   const m = label.match(/^`([\s\S]*)`$/);
   if (!m) return { label, bold: false };
   const bold = /^\*\*[^*]+\*\*$/.test(m[1].trim());
-  return { label: m[1].replace(/\*\*/g, '').trim(), bold };
+  // Bold and italic markers are markup; italics can't be shown, so they just go.
+  const text = m[1].replace(/\*\*/g, '').replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=$|[^\w*])/g, '$1$2').trim();
+  return { label: text, bold };
 }
 
 // `A:::hot` attaches a class, whose classDef may colour the block.
 function readClass(s, i) {
-  const m = s.slice(i).match(/^:::([A-Za-z0-9_-]+)/);
+  const m = s.slice(i).match(/^:::([\p{L}\p{N}_-]+)/u);
   return m ? { next: i + m[0].length, cls: m[1] } : { next: i, cls: null };
 }
 
@@ -611,14 +635,27 @@ function readNodeList(s, i) {
   return { refs, next };
 }
 
-// Rewrites Mermaid's `A -- text --> B` into the `A -->|text| B` form so the
-// scanner below only has to know one shape. The trailing arrow is captured
-// whole, because dash runs are variable-length (`-- text ---->`).
-function normalizeInlineLabels(line) {
-  return line
-    .replace(/--\s+([^->|]+?)\s+(-{2,}[>ox]?)/g, '$2|$1|')
-    .replace(/==\s+([^=>|]+?)\s+(={2,}>?)/g, '$2|$1|')
-    .replace(/-\.\s+([^.|]+?)\s+\.(-+>?)/g, '-.$2|$1|');
+// The link starting at `i`, in either form Mermaid takes: `-->|text|` (LINK_RE)
+// or text inside the link itself, `-- text -->`, `== text ==>`, `-. text .->`.
+// The second is tried first, at this one spot (not across the line, where a
+// label like "Step 1 -- prepare" would be mistaken for one): its opener is a
+// bare `--` / `==` / `-.` that a full link token can't start with.
+const TEXT_LINK_RE = /^\s*(?:[\p{L}\p{N}_]+@)?([<ox]?)(?:(--)(?![->ox-])|(==)(?![=>ox=])|(-\.)(?![-.>]))\s*("[^"]*"|.*?)\s*(-{2,}|={2,}|\.-+)([>ox]?)(?=[\s\p{L}\p{N}_"]|$)/u;
+function readLink(s, i) {
+  const t = s.slice(i).match(TEXT_LINK_RE);
+  if (t && t[5]) {
+    const open = t[2] || t[3] || t[4];
+    const close = t[6];
+    // The closer has to belong to the opener: `-- x ==>` is not one link.
+    const ok = (open === '--' && close[0] === '-') || (open === '==' && close[0] === '=') || (open === '-.' && close[0] === '.');
+    if (ok) {
+      const token = t[1] + (open === '-.' ? '-' + close + t[7] : close + t[7]);
+      return { token, label: t[5], next: i + t[0].length };
+    }
+  }
+  const m = s.slice(i).match(LINK_RE);
+  if (!m) return null;
+  return { token: m[1], label: m[2], next: i + m[0].length };
 }
 
 function readAnchor(s) {
@@ -850,6 +887,35 @@ function blockToFlowchart(text) {
   return src.front.concat(['flowchart LR'], decls, links.map((l) => '  ' + l), [LAYOUT_HEADER], layoutLines).join('\n');
 }
 
+// A quoted label or an `@{ ... }` block may run over several lines; each is
+// joined into one statement (a newline inside quotes stays a line break, one
+// inside braces separates properties). An `accDescr { ... }` block is dropped.
+function joinOpenLines(lines) {
+  const out = [];
+  let pending = null;
+  let inDescr = false;
+  for (const l of lines) {
+    if (inDescr) { if (l.includes('}')) inDescr = false; continue; }
+    if (pending == null && /^\s*accDescr\s*\{/.test(l) && !l.includes('}')) { inDescr = true; continue; }
+    const text = pending == null ? l : pending + (open(pending).quote ? '\n' : ', ') + l.trim();
+    if (!text.trim().startsWith('%%') && open(text).any) pending = text;
+    else { out.push(text); pending = null; }
+  }
+  if (pending != null) out.push(pending);
+  return out;
+
+  function open(t) {
+    let quote = false;
+    let depth = 0;
+    for (const c of t) {
+      if (c === '"') quote = !quote;
+      else if (!quote && c === '{') depth++;
+      else if (!quote && c === '}') depth--;
+    }
+    return { quote, any: quote || depth > 0 };
+  }
+}
+
 function parseMermaid(text) {
   const state = stateToFlowchart(text);
   const block = state == null ? blockToFlowchart(text) : null;
@@ -886,6 +952,11 @@ function parseMermaid(text) {
       if (ref.label != null) n.label = ref.label;
       if (ref.shape) n.shape = ref.shape;
       if (ref.bold) n.bold = true;
+      // Mentioned inside a subgraph, a block seen before outside any joins
+      // it, as in Mermaid (`subgraph S` / `B` / `end` is how one is moved
+      // in); one already in a subgraph stays in the first.
+      const g = groupStack[groupStack.length - 1];
+      if (g && !d.groups.some((other) => other.members.includes(n.id))) g.members.push(n.id);
     }
     if (ref.cls) (classOf[n.id] = classOf[n.id] || []).push(ref.cls);
     return n;
@@ -904,13 +975,13 @@ function parseMermaid(text) {
   // `;` ends a statement just as a newline does (`flowchart LR; A-->B;`), so
   // statements are split there too -- but not inside a quoted label or a
   // shape's brackets, and never in a `%%` line.
-  lines = lines.flatMap((l) => l.trim().startsWith('%%') ? [l] : splitStatements(l));
+  lines = joinOpenLines(lines).flatMap((l) => l.trim().startsWith('%%') ? [l] : splitStatements(l));
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
 
-    const layoutMatch = line.match(/^%%\s+([A-Za-z0-9_-]+)\s+(-?\d+),(-?\d+)\s+(\d+)x(\d+)\s*$/);
+    const layoutMatch = line.match(/^%%\s+([\p{L}\p{N}_-]+)\s+(-?\d+),(-?\d+)\s+(\d+)x(\d+)\s*$/u);
     if (layoutMatch) {
       layout[layoutMatch[1]] = {
         x: +layoutMatch[2], y: +layoutMatch[3], w: +layoutMatch[4], h: +layoutMatch[5],
@@ -935,7 +1006,7 @@ function parseMermaid(text) {
     // Builds before v27 wrote a wire junction as `sm-circ`, Mermaid's start
     // dot; their symbol comment says which ones were junctions.
     if (line.startsWith('%%')) {
-      for (const m of line.matchAll(/([A-Za-z0-9_-]+) is a wire junction/g)) oldJunctions.add(m[1]);
+      for (const m of line.matchAll(/([\p{L}\p{N}_-]+) is a wire junction/gu)) oldJunctions.add(m[1]);
       continue;
     }
 
@@ -951,8 +1022,8 @@ function parseMermaid(text) {
     // `subgraph "Name"` form an LLM sometimes writes -- falling through would
     // parse the keyword itself as a block called "subgraph".
     if (/^subgraph\b/.test(line)) {
-      const sub = line.match(/^subgraph\s+([A-Za-z0-9_-]+)\s*(?:\[(.*)\])?\s*$/);
-      const label = sub ? (sub[2] ? unquoteLabel(sub[2]) : sub[1]) : unquoteLabel(line.slice(9).trim());
+      const sub = line.match(/^subgraph\s+([\p{L}\p{N}_-]+)\s*(?:\[(.*)\])?\s*$/u);
+      const label = markdownLabel(sub ? (sub[2] ? unquoteLabel(sub[2]) : sub[1]) : unquoteLabel(line.slice(9).trim())).label;
       const id = sub ? sub[1] : makeId(label, new Set(d.groups.map((g) => g.id)));
       const g = { id, label, members: [], parent: groupStack.length ? groupStack[groupStack.length - 1].id : null,
                   x: 0, y: 0, w: 0, h: 0 };
@@ -960,9 +1031,10 @@ function parseMermaid(text) {
       groupStack.push(g);
       continue;
     }
-    if (/^end$/i.test(line)) { groupStack.pop(); continue; }
+    // Lowercase only: Mermaid reads `End` as a block (the usual name for one).
+    if (line === 'end') { groupStack.pop(); continue; }
 
-    const style = line.match(/^style\s+([A-Za-z0-9_-]+)\s+(.*)$/);
+    const style = line.match(/^style\s+([\p{L}\p{N}_-]+)\s+(.*)$/u);
     if (style) { styles[style[1]] = style[2]; continue; }
 
     // Consumed whatever it says, including `linkStyle default ...`, which
@@ -979,44 +1051,44 @@ function parseMermaid(text) {
       if (groupStack.length) groupStack[groupStack.length - 1].direction = dirLine[1].toUpperCase().replace('TB', 'TD');
       continue;
     }
-    const classDef = line.match(/^classDef\s+([A-Za-z0-9_,-]+)\s+(.*)$/);
+    const classDef = line.match(/^classDef\s+([\p{L}\p{N}_,-]+)\s+(.*)$/u);
     if (classDef) { for (const c of classDef[1].split(',')) classDefs[c] = classDef[2]; continue; }
-    const classLine = line.match(/^class\s+([A-Za-z0-9_,\s-]+?)\s+([A-Za-z0-9_-]+)\s*$/);
+    const classLine = line.match(/^class\s+([\p{L}\p{N}_,\s-]+?)\s+([\p{L}\p{N}_-]+)\s*$/u);
     if (classLine) {
       for (const id of classLine[1].split(',')) (classOf[id.trim()] = classOf[id.trim()] || []).push(classLine[2]);
       continue;
     }
     if (/^(classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
     // `e1@{ animate: true }` styles the link named e1: nothing to draw.
-    const named = line.match(/^([A-Za-z0-9_]+)@\{/);
+    const named = line.match(/^([\p{L}\p{N}_]+)@\{/u);
     if (named && edgeIds.has(named[1])) continue;
 
     // Anything left is a node declaration or a chain of edges, where either
     // side of a link may be an `A & B` list: every pairing becomes an edge.
-    const s = normalizeInlineLabels(line);
+    const s = line;
     const head = readNodeList(s, 0);
     if (!head) continue;
     let prev = head.refs.map(ensureNode);
     let i = head.next;
     while (i < s.length) {
-      const link = s.slice(i).match(LINK_RE);
+      const link = readLink(s, i);
       if (!link) break;
-      const edgeId = link[0].match(/([A-Za-z0-9_]+)@/);
+      const edgeId = s.slice(i, link.next).match(/^\s*([\p{L}\p{N}_]+)@/u);
       if (edgeId) edgeIds.add(edgeId[1]);
-      i += link[0].length;
+      i = link.next;
       const next = readNodeList(s, i);
       if (!next) break;
       i = next.next;
       const targets = next.refs.map(ensureNode);
-      if (link[1].startsWith('~')) {
+      if (link.token.startsWith('~')) {
         for (const a of prev) for (const b of targets) invisible.push([a.id, b.id]);
         prev = targets;
         continue;
       }
       for (const a of prev) {
         for (const b of targets) {
-          const e = Object.assign(newEdge(a.id, b.id), linkFromToken(link[1]));
-          e.label = link[2] ? markdownLabel(unquoteLabel(link[2])).label : '';
+          const e = Object.assign(newEdge(a.id, b.id), linkFromToken(link.token));
+          e.label = link.label ? markdownLabel(unquoteLabel(link.label)).label : '';
           d.edges.push(e);
         }
       }

@@ -102,6 +102,7 @@ function labelArea(n) {
     case 'disk': case 'bucket': { const r = Math.min(12, h / 4); return { x, y: y + r * 2, w, h: h - r * 2 }; }
     case 'folder': return { x, y: y + 8, w, h: h - 8 };
     case 'documents': { const a = Math.min(8, h * 0.15); return { x, y: y + 8, w: w - 8, h: h - 8 - a }; }
+    case 'paper_tape': { const a = Math.min(8, h * 0.15); return { x, y: y + a, w, h: h - 2 * a }; }
     case 'tagged_doc': { const a = Math.min(8, h * 0.15); return { x, y, w, h: h - a }; }
     case 'stored': case 'display': { const r = Math.min(14, w / 6); return { x: x + r, y, w: w - 2 * r, h }; }
     case 'loop_limit': case 'card': { const c = Math.min(12, h / 3); return { x, y: y + c / 2, w, h: h - c / 2 }; }
@@ -311,6 +312,12 @@ function shapeElement(n) {
       return [el('rect', { x, y, width: w, height: h, rx: Math.min(2, w / 2), class: 'wm-shape wm-solid' })];
     case 'cloud':
       return [el('path', { d: cloudPath(n), class: 'wm-shape' })];
+    // Punched tape: waved top and bottom.
+    case 'paper_tape': {
+      const a = Math.min(8, h * 0.15);
+      return [el('path', { d: `M${x} ${y + a}C${x + w / 3} ${y - a} ${x + 2 * w / 3} ${y + 3 * a} ${x + w} ${y + a}V${y + h - a}` +
+        `C${x + 2 * w / 3} ${y + h - 3 * a} ${x + w / 3} ${y + h + a} ${x} ${y + h - a}Z`, class: 'wm-shape' })];
+    }
     // Head and shoulders, the person / actor of every architecture diagram.
     case 'person': {
       const r = personHead(n);

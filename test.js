@@ -59,6 +59,35 @@ check("a subgraph's own direction lays it out (a row in a top-down diagram)", at
   d.nodes.map((n) => [n.id, n.x, n.y]));
 check('a subgraph direction is written back', /subgraph Svc\["Services"\]\n    direction LR/.test(toMermaid(d)), toMermaid(d));
 
+// Found by the stress corpus: each once read wrong.
+for (const [name, src, want] of [
+  ['open-link chain', 'flowchart LR\n  A --- B --- C', 'A>B B>C'],
+  ['hyphen in link text', 'flowchart LR\n  A -- re-try --> B', 'A>B|re-try'],
+  ['link text without spaces', 'flowchart LR\n  A--text-->B', 'A>B|text'],
+  ['-- inside a quoted label', 'flowchart LR\n  A["Step 1 -- prepare"] --> B', 'A>B'],
+  ['unicode ids', 'flowchart LR\n  Prüfung --> Ergebnis', 'Prüfung>Ergebnis'],
+  ['label over two lines', 'flowchart LR\n  A["line one\nline two"] --> B', 'A>B'],
+  ['@{ } over several lines', 'flowchart LR\n  A@{\n    shape: cyl\n    label: "X"\n  } --> B', 'A>B'],
+  ['accDescr block', 'flowchart LR\n  accDescr {\n    two words\n  }\n  A --> B', 'A>B'],
+]) {
+  const r = parseMermaid(src);
+  check('stress: ' + name, edges(r) === want && r.nodes.length === new Set(want.split(/[ >|]/).filter((t) => /^[A-ZÀ-ÿ]/.test(t))).size, [ids(r), edges(r)]);
+}
+d = parseMermaid('flowchart LR\n  A@{\n    shape: cyl\n    label: "X"\n  }\n  B["two\nlines"]');
+check('multi-line @{ } and label read in full', d.nodes[0].shape === 'cylinder' && d.nodes[0].label === 'X' && d.nodes[1].label === 'two\nlines', d.nodes);
+d = parseMermaid('flowchart TB\n  subgraph S\n    Start --> End\n    Mid\n  end');
+check('a block called End does not close the subgraph', d.groups[0].members.join() === 'Start,End,Mid', d.groups);
+d = parseMermaid('flowchart LR\n  A --> B\n  subgraph S\n    B\n  end\n  subgraph T\n    C --> B\n  end');
+check('a block mentioned in a subgraph joins it, the first one only', d.groups[0].members.join() === 'B' && d.groups[1].members.join() === 'C', d.groups);
+d = parseMermaid('flowchart LR\n  A["I #9829; it #amp; you"] --> B["`*draft* **only**`"]\n  subgraph S["`**Backend**`"]\n    C\n  end');
+check('entities and markdown decoded', d.nodes[0].label === 'I ♥ it & you' && d.nodes[1].label === 'draft only' && d.groups[0].label === 'Backend', [d.nodes.map((n) => n.label), d.groups[0].label]);
+d = parseMermaid('flowchart LR\n  A@{ shape: flag, label: "Tape" } --> B@{ shape: odd, label: "Odd" } --> C@{ shape: bolt, label: "Signal" }');
+check('paper tape, odd and a labelled bolt survive a round trip', /shape: flag, label: "Tape"/.test(toMermaid(d)) && /B>"Odd"\]/.test(toMermaid(d)) && /bolt, label: "Signal"/.test(toMermaid(d)), toMermaid(d));
+for (const [src, want] of [['flowchart TD\n  A --> B & C & D & E & F & G', 'TD'], ['flowchart RL\n  A --- B\n  B --- C', 'RL'],
+  ['flowchart LR\n  subgraph S\n    direction TB\n    A --> B --> C\n  end\n  S --> D', 'LR']]) {
+  check('direction kept: ' + src.split('\n')[1].trim(), toMermaid(parseMermaid(src)).startsWith('flowchart ' + want), toMermaid(parseMermaid(src)).split('\n')[0]);
+}
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&
