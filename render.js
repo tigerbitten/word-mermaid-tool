@@ -142,6 +142,8 @@ function fitNodeSize(n) {
 // gets twice it, so it stays a diamond rather than a tall spike.
 function sizeForLabel(n) {
   if (LABELLESS.has(n.shape) || !n.label) return;
+  // A blank diamond or circle is a marker (a state diagram's choice): small.
+  if (!n.label.trim() && /diamond|circle/.test(n.shape)) { n.w = 40; n.h = 40; return; }
   const one = textWidth(n.label, n.fontSize || DEFAULT_FONT_SIZE, n.bold);
   const textW = Math.min(240, one / 3 + LABEL_PAD_X * 2 + 20);
   n.w = Math.max(n.w, Math.ceil(textW * n.w / labelArea(n).w / 10) * 10);
@@ -295,6 +297,7 @@ function shapeElement(n) {
       })];
     }
     case 'junction':
+    case 'start':
       return [el('ellipse', { cx, cy, rx: w / 2, ry: h / 2, class: 'wm-shape wm-solid' })];
     case 'sum': {
       const dx = (w / 2) * 0.707;
@@ -510,7 +513,7 @@ function outlineOf(n) {
   });
   const P = Math.PI;
   switch (n.shape) {
-    case 'circle': case 'doublecircle': case 'junction': case 'sum':
+    case 'circle': case 'doublecircle': case 'junction': case 'start': case 'sum':
       return arc(cx, cy, w / 2, h / 2, 0, 2 * P, 48);
     case 'diamond': return [{ x: cx, y }, { x: x + w, y: cy }, { x: cx, y: y + h }, { x, y: cy }];
     case 'hexagon': {
@@ -689,6 +692,19 @@ function crossesBox(u, v, r) {
          Math.max(u.y, v.y) > r.y + 1 && Math.min(u.y, v.y) < r.y + r.h - 1;
 }
 
+// How far a leg runs alongside a block within HUG of its edge without
+// entering it: a line skimming a box's side reads as part of its outline.
+const HUG = 10;
+function hugLength(u, v, r) {
+  if (!r.w || !r.h) return 0;
+  const lx = Math.min(u.x, v.x), hx = Math.max(u.x, v.x), ly = Math.min(u.y, v.y), hy = Math.max(u.y, v.y);
+  if (hx <= r.x - HUG + 1 || lx >= r.x + r.w + HUG - 1 || hy <= r.y - HUG + 1 || ly >= r.y + r.h + HUG - 1) return 0;
+  if (crossesBox(u, v, r)) return 0;
+  return hy - ly < 0.5
+    ? Math.max(0, Math.min(hx, r.x + r.w + HUG) - Math.max(lx, r.x - HUG))
+    : Math.max(0, Math.min(hy, r.y + r.h + HUG) - Math.max(ly, r.y - HUG));
+}
+
 // Running through another block is allowed -- something has to be drawn when
 // there's no way round -- but costs more than any detour or shared stretch,
 // so any route clear of blocks wins.
@@ -728,6 +744,7 @@ function routeCost(pts, s0, A, s1, B) {
     // on B's heading in, so each is only checked against the other block.
     if (i > 1 && crossesBox(u, v, A)) return null;
     if (i < pts.length - 1 && crossesBox(u, v, B)) return null;
+    if (i > 1 && i < pts.length - 1) len += (hugLength(u, v, A) + hugLength(u, v, B)) * 4;
   }
   const out = DIRS[s0];
   const into = DIRS[s1];
@@ -744,7 +761,13 @@ function routeCost(pts, s0, A, s1, B) {
 function clutterCost(pts, obstacles, lanes) {
   let cost = 0;
   for (let i = 1; i < pts.length; i++) {
-    for (const r of obstacles) if (crossesBox(pts[i - 1], pts[i], r)) cost += THROUGH_BLOCK;
+    const u = pts[i - 1], v = pts[i];
+    const lx = Math.min(u.x, v.x), hx = Math.max(u.x, v.x), ly = Math.min(u.y, v.y), hy = Math.max(u.y, v.y);
+    for (const r of obstacles) {
+      // Clear of the block and its margin: by far the usual case, so first.
+      if (hx <= r.x - HUG + 1 || lx >= r.x + r.w + HUG - 1 || hy <= r.y - HUG + 1 || ly >= r.y + r.h + HUG - 1) continue;
+      cost += crossesBox(u, v, r) ? THROUGH_BLOCK : hugLength(u, v, r) * 4;
+    }
     cost += sharedLength(pts[i - 1], pts[i], lanes) * 2;
   }
   return cost;

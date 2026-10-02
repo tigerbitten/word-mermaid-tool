@@ -39,7 +39,8 @@ const SHAPES = {
   queue:             { v11: 'h-cyl' },
   buffer:            { v11: 'tri' },
   delay:             { v11: 'delay' },
-  junction:          { v11: 'sm-circ' },
+  junction:          { v11: 'f-circ' },
+  start:             { v11: 'sm-circ' },
   sum:               { v11: 'cross-circ' },
   bar:               { v11: 'fork' },
   // Architecture and the rest of the flowchart set, each Mermaid 11's own name.
@@ -109,7 +110,8 @@ const V11_NAMES = {
   queue: ['h-cyl', 'das', 'horizontal-cylinder'],
   buffer: ['tri', 'extract', 'triangle'],
   delay: ['delay', 'half-rounded-rectangle'],
-  junction: ['sm-circ', 'small-circle', 'start', 'f-circ', 'filled-circle', 'junction'],
+  junction: ['f-circ', 'filled-circle', 'junction'],
+  start: ['sm-circ', 'small-circle', 'start'],
   sum: ['cross-circ', 'summary', 'crossed-circle'],
   bar: ['fork', 'join'],
   cloud: ['cloud'],
@@ -145,8 +147,8 @@ for (const shape in V11_NAMES) for (const name of V11_NAMES[shape]) SHAPE_BY_V11
 
 // Wiring symbols carry no text: a junction dot, a summing node, a bus bar.
 // They get their own natural size instead of a text box's.
-const LABELLESS = new Set(['junction', 'sum', 'bar', 'point', 'stop', 'bolt']);
-const SHAPE_SIZE = { junction: [14, 14], sum: [40, 40], bar: [10, 80], point: [0, 0], stop: [28, 28], bolt: [30, 50],
+const LABELLESS = new Set(['junction', 'start', 'sum', 'bar', 'point', 'stop', 'bolt']);
+const SHAPE_SIZE = { junction: [14, 14], start: [20, 20], sum: [40, 40], bar: [10, 80], point: [0, 0], stop: [28, 28], bolt: [30, 50],
   person: [100, 90], cloud: [150, 90], collate: [60, 70], manual_file: [130, 70] };
 
 const isPoint = (n) => !!n && n.shape === 'point';
@@ -616,7 +618,7 @@ function normalizeInlineLabels(line) {
   return line
     .replace(/--\s+([^->|]+?)\s+(-{2,}[>ox]?)/g, '$2|$1|')
     .replace(/==\s+([^=>|]+?)\s+(={2,}>?)/g, '$2|$1|')
-    .replace(/-\.\s+([^.|]+?)\s+\.-+>?/g, '-.->|$1|');
+    .replace(/-\.\s+([^.|]+?)\s+\.(-+>?)/g, '-.$2|$1|');
 }
 
 function readAnchor(s) {
@@ -638,7 +640,224 @@ function splitStatements(line) {
   return out;
 }
 
+// --- other diagram types, read as flowcharts ------------------------------
+//
+// A state diagram and a block diagram are boxes and arrows too, so they are
+// translated into the flowchart text that would draw them and read from that:
+// the canvas then edits them like anything else, and the alt text is a
+// flowchart that says the same thing.
+
+// The text after a diagram's header (front matter and `%%` lines before it
+// skipped), or null when the header isn't `kind`.
+function afterHeader(text, kind) {
+  const lines = stripFence(text).split('\n');
+  let k = 0;
+  if (lines[0] && lines[0].trim() === '---') { k = lines.findIndex((l, j) => j > 0 && l.trim() === '---') + 1; }
+  const front = lines.slice(0, k);
+  while (k < lines.length && (!lines[k].trim() || lines[k].trim().startsWith('%%'))) k++;
+  if (!lines[k] || !kind.test(lines[k].trim())) return null;
+  return { front, header: lines[k].trim(), body: lines.slice(k + 1) };
+}
+
+// stateDiagram(-v2): states are rounded boxes, [*] the start dot and the stop
+// circle (one of each per composite state), composites are subgraphs, choice
+// a diamond, fork/join a bar, notes a braced note tied on with a dotted line.
+function stateToFlowchart(text) {
+  const src = afterHeader(text, /^stateDiagram(-v2)?\b/);
+  if (!src) return null;
+  const names = {};   // id -> display name from `state "Name" as id`
+  const descs = {};   // id -> description lines from `id : text`
+  const kinds = {};   // id -> choice / fork / join
+  const lines = src.body.map((l) => l.trim());
+  // Notes span lines until `end note`; folded into one line first.
+  const flat = [];
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^note\s+(left|right)\s+of\s+([\w-]+)\s*$/i);
+    if (open) {
+      const end = lines.findIndex((l, j) => j > i && /^end\s*note$/i.test(l));
+      const stop = end === -1 ? lines.length : end;
+      flat.push(`note ${open[1]} of ${open[2]} : ${lines.slice(i + 1, stop).join('\n')}`);
+      i = stop;
+    } else flat.push(lines[i]);
+  }
+  for (const l of flat) {
+    let m;
+    if ((m = l.match(/^state\s+"([^"]*)"\s+as\s+([\w-]+)/))) names[m[2]] = m[1];
+    else if ((m = l.match(/^state\s+([\w-]+)\s+<<(choice|fork|join)>>/))) kinds[m[1]] = m[2];
+    else if ((m = l.match(/^([\w-]+)\s*:\s*(.+)$/)) && !/^(note|state|classDef|class|style|direction)$/.test(m[1])) (descs[m[1]] = descs[m[1]] || []).push(m[2].trim());
+  }
+  let dir = 'TD';
+  const out = [];
+  const seen = new Set();
+  const scope = [];
+  let notes = 0;
+  const pad = () => '  '.repeat(scope.length + 1);
+  const ref = (token, side) => {
+    if (token === '[*]') {
+      const id = (side === 'from' ? 'start_' : 'end_') + (scope[scope.length - 1] || 'root');
+      if (seen.has(id)) return id;
+      seen.add(id);
+      return id + (side === 'from' ? '@{ shape: sm-circ }' : '@{ shape: fr-circ }');
+    }
+    const [id, cls] = token.split(':::');
+    if (cls) out.push(pad() + 'class ' + id + ' ' + cls);
+    if (seen.has(id)) return id;
+    seen.add(id);
+    if (kinds[id] === 'choice') return id + '{" "}';
+    if (kinds[id]) return id + '@{ shape: fork }';
+    // Mermaid shows a described state as its name over its description.
+    const label = [names[id] || id].concat(descs[id] || []).join('\n');
+    return id + '(' + quoteLabel(label) + ')';
+  };
+  for (const l of flat) {
+    let m;
+    if (!l || l.startsWith('%%') || l === '--' || /^(hide|scale|accTitle|accDescr)\b/.test(l)) continue;
+    if ((m = l.match(/^direction\s+(TB|TD|BT|LR|RL)\b/i))) {
+      if (scope.length) out.push(pad() + 'direction ' + m[1].toUpperCase());
+      else dir = m[1].toUpperCase();
+      continue;
+    }
+    if ((m = l.match(/^state\s+(?:"([^"]*)"\s+as\s+)?([\w-]+)\s*\{$/))) {
+      out.push(pad() + 'subgraph ' + m[2] + '[' + quoteLabel(m[1] || names[m[2]] || m[2]) + ']');
+      scope.push(m[2]);
+      seen.add(m[2]);
+      continue;
+    }
+    if (l === '}') { scope.pop(); out.push(pad() + 'end'); continue; }
+    if (/^(classDef|class|style)\b/.test(l)) { out.push(pad() + l); continue; }
+    if ((m = l.match(/^note\s+(left|right)\s+of\s+([\w-]+)\s*:\s*([\s\S]*)$/i))) {
+      const id = 'note' + ++notes;
+      out.push(pad() + ref(m[2], 'to') + ' -.- ' + id + '@{ shape: ' + (m[1].toLowerCase() === 'right' ? 'brace' : 'brace-r') +
+        ', label: ' + quoteLabel(m[3].trim()) + ' }');
+      continue;
+    }
+    if ((m = l.match(/^(\S+)\s*-->\s*([^:\s]+)\s*(?::\s*(.*))?$/))) {
+      const from = ref(m[1], 'from');
+      const to = ref(m[2], 'to');
+      out.push(pad() + from + (m[3] ? ' -->|' + quoteLabel(m[3].trim()) + '| ' : ' --> ') + to);
+      continue;
+    }
+    if ((m = l.match(/^state\s+(?:"[^"]*"\s+as\s+)?([\w-]+)/)) || (m = l.match(/^([\w-]+(?::::[\w-]+)?)\s*(?::.*)?$/))) {
+      const r = ref(m[1], 'to');
+      if (r !== m[1].split(':::')[0]) out.push(pad() + r);
+    }
+  }
+  return src.front.concat(['flowchart ' + dir], out).join('\n');
+}
+
+// block-beta: rows of blocks in a fixed number of columns, `id:2` spanning
+// two, `space` an empty cell, `block:id ... end` a nested grid. The grid is
+// exact, so it is written as positions (the layout lines) rather than left
+// to the layered layout.
+function blockToFlowchart(text) {
+  const src = afterHeader(text, /^block(-beta)?\b/);
+  if (!src) return null;
+  const GAP = 20;
+  const ROW_H = 56;
+  // Whitespace-separated items, but not inside brackets or quotes.
+  const items = (line) => {
+    const out = [];
+    let depth = 0, start = -1;
+    for (let i = 0; i <= line.length; i++) {
+      const c = line[i];
+      if (c === '"') { if (start < 0) start = i; i = skipQuoted(line, i) - 1; continue; }
+      if (c && '[({<'.includes(c)) depth++;
+      else if (c && ')]}>'.includes(c)) depth = Math.max(0, depth - 1);
+      if ((c === undefined || /\s/.test(c)) && depth === 0) { if (start >= 0) out.push(line.slice(start, i)); start = -1; }
+      else if (start < 0) start = i;
+    }
+    return out;
+  };
+  const root = { id: null, columns: null, items: [] };
+  const stack = [root];
+  const links = [];
+  let anon = 0;
+  for (const raw of src.body) {
+    const l = raw.trim();
+    if (!l || l.startsWith('%%')) continue;
+    const top = stack[stack.length - 1];
+    let m;
+    if ((m = l.match(/^columns\s+(\d+|auto)\s*$/))) { top.columns = m[1] === 'auto' ? null : +m[1]; continue; }
+    if (/^(classDef|class|style|linkStyle)\b/.test(l) || /(-->|---|-\.-|==>|~~~)/.test(l)) { links.push(l); continue; }
+    if (l === 'end') { if (stack.length > 1) stack.pop(); continue; }
+    for (const tok of items(l)) {
+      const blk = tok.match(/^block(?::([\w-]+))?(?::(\d+))?$/);
+      if (blk) {
+        const c = { id: blk[1] || 'block' + ++anon, columns: null, items: [], span: +(blk[2] || 1) };
+        stack[stack.length - 1].items.push(c);
+        stack.push(c);
+        continue;
+      }
+      const sp = tok.match(/^space(?::(\d+))?$/);
+      if (sp) { stack[stack.length - 1].items.push({ space: true, span: +(sp[1] || 1) }); continue; }
+      // `id<["label"]>(right)`, a block arrow: drawn as a plain block.
+      const span = tok.match(/:(\d+)$/);
+      const decl = (span ? tok.slice(0, span.index) : tok).replace(/<\[([\s\S]*)\]>\([\w,\s]*\)$/, '["$1"]').replace(/\["("[\s\S]*")"\]$/, '[$1]');
+      const ref = readNodeRef(decl, 0);
+      if (!ref) continue;
+      const label = ref.label != null ? ref.label : ref.id;
+      const w = Math.max(120, Math.min(260, label.length * 7 + 36));
+      stack[stack.length - 1].items.push({ id: ref.id, decl, span: span ? +span[1] : 1, w, h: ROW_H });
+    }
+  }
+  // Natural size of a container: its cells as wide as the widest item per
+  // column it spans, rows as tall as their tallest item.
+  const titleH = groupTitleH({});
+  const measure = (c) => {
+    for (const it of c.items) if (it.items) measure(it);
+    const cols = c.columns || Math.max(1, c.items.reduce((sum, it) => sum + it.span, 0));
+    c.cols = cols;
+    const cell = Math.max(60, ...c.items.filter((it) => !it.space).map((it) => (it.w - (it.span - 1) * GAP) / Math.min(it.span, cols)));
+    c.cell = cell;
+    c.rows = [];
+    let col = cols;
+    for (const it of c.items) {
+      const span = Math.min(it.span, cols);
+      if (col + span > cols) { c.rows.push([]); col = 0; }
+      c.rows[c.rows.length - 1].push({ it, col, span });
+      col += span;
+    }
+    const rowHs = c.rows.map((r) => Math.max(ROW_H, ...r.filter((x) => !x.it.space).map((x) => x.it.h)));
+    c.rowHs = rowHs;
+    const inner = { w: cols * cell + (cols - 1) * GAP, h: rowHs.reduce((a, b) => a + b, 0) + Math.max(0, rowHs.length - 1) * GAP };
+    c.w = c.id ? inner.w + GROUP_PAD * 2 : inner.w;
+    c.h = c.id ? inner.h + GROUP_PAD * 2 + titleH : inner.h;
+  };
+  measure(root);
+  const decls = [];
+  const layoutLines = [];
+  const place = (c, x, y, depth) => {
+    const ox = c.id ? x + GROUP_PAD : x;
+    let oy = c.id ? y + GROUP_PAD + titleH : y;
+    const pad = '  '.repeat(depth + 1);
+    c.rows.forEach((row, r) => {
+      for (const { it, col, span } of row) {
+        const cx = ox + col * (c.cell + GAP);
+        if (it.space) continue;
+        if (it.items) {
+          decls.push(pad + 'subgraph ' + it.id + '[' + quoteLabel(it.id.replace(/^block\d+$/, ' ')) + ']');
+          place(it, cx, oy, depth + 1);
+          decls.push(pad + 'end');
+        } else {
+          decls.push(pad + it.decl);
+          layoutLines.push(`%% ${it.id} ${Math.round(cx)},${Math.round(oy)} ${Math.round(span * c.cell + (span - 1) * GAP)}x${it.h}`);
+        }
+      }
+      oy += c.rowHs[r] + GAP;
+    });
+  };
+  place(root, 40, 40, 0);
+  return src.front.concat(['flowchart LR'], decls, links.map((l) => '  ' + l), [LAYOUT_HEADER], layoutLines).join('\n');
+}
+
 function parseMermaid(text) {
+  const state = stateToFlowchart(text);
+  const block = state == null ? blockToFlowchart(text) : null;
+  if (state != null || block != null) {
+    const d = parseMermaid(state != null ? state : block);
+    d.from = state != null ? 'state diagram' : 'block diagram';
+    return d;
+  }
   const d = newDiagram();
   const layout = {};
   const anchors = {};
@@ -649,6 +868,7 @@ function parseMermaid(text) {
   const classDefs = {};   // classDef name -> its style declaration
   const classOf = {};     // node id -> class names, in the order given
   const edgeIds = new Set();
+  const oldJunctions = new Set();
   let groupStack = [];
   let sawHeader = false;
   const invisible = [];   // `A ~~~ B`: [from, to], for the layout only
@@ -712,9 +932,14 @@ function parseMermaid(text) {
     }
     const routeMatch = line.match(/^%%\s+route\s+(\d+)\s+(straight|elbow)\s*$/);
     if (routeMatch) { routes[+routeMatch[1]] = routeMatch[2]; continue; }
-    if (line.startsWith('%%')) continue;
+    // Builds before v27 wrote a wire junction as `sm-circ`, Mermaid's start
+    // dot; their symbol comment says which ones were junctions.
+    if (line.startsWith('%%')) {
+      for (const m of line.matchAll(/([A-Za-z0-9_-]+) is a wire junction/g)) oldJunctions.add(m[1]);
+      continue;
+    }
 
-    const header = line.match(/^(?:flowchart|graph)(?:\s+(TD|TB|LR|RL|BT))?\s*;?$/i);
+    const header = line.match(/^(?:flowchart(?:-elk)?|graph)(?:\s+(TD|TB|LR|RL|BT))?\s*;?$/i);
     if (header) {
       sawHeader = true;
       const dir = (header[1] || 'TD').toUpperCase();
@@ -803,11 +1028,12 @@ function parseMermaid(text) {
   // stray sentence would parse as a block named after its first word. Mermaid
   // itself refuses a diagram with no header, so this refuses the same thing.
   if (!sawHeader) {
-    const other = (stripFence(text).match(/^\s*(sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|mindmap|timeline|journey|gitGraph|quadrantChart|requirementDiagram|sankey(?:-beta)?|xychart(?:-beta)?|block(?:-beta)?|packet(?:-beta)?|architecture(?:-beta)?|kanban|C4\w+)\b/m) || [])[1];
-    throw new Error(other ? `that's a ${other}: this tool draws flowcharts and block diagrams only (a first line like "flowchart LR")`
+    const other = (stripFence(text).match(/^\s*(sequenceDiagram|classDiagram|erDiagram|gantt|pie|mindmap|timeline|journey|gitGraph|quadrantChart|requirementDiagram|sankey(?:-beta)?|xychart(?:-beta)?|packet(?:-beta)?|architecture(?:-beta)?|kanban|C4\w+)\b/m) || [])[1];
+    throw new Error(other ? `that's a ${other}: this tool reads flowcharts, state diagrams and block diagrams (a first line like "flowchart LR")`
       : 'expected a "flowchart LR" (or TD) line at the top');
   }
 
+  for (const n of d.nodes) if (n.shape === 'start' && oldJunctions.has(n.id)) n.shape = 'junction';
   for (const n of d.nodes) {
     // A style line wins over the classes, a later class over an earlier one:
     // the winner goes first, where the first match below finds it.

@@ -16,6 +16,7 @@ const check = (name, ok, detail) => {
   if (!ok) failed++;
 };
 const edges = (d) => d.edges.map((e) => e.from + '>' + e.to + (e.label ? '|' + e.label : '')).join(' ');
+const at2 = (d, id) => d.nodes.find((n) => n.id === id);
 const ids = (d) => d.nodes.map((n) => n.id).join(',');
 
 // What LLMs write.
@@ -58,6 +59,17 @@ check("a subgraph's own direction lays it out (a row in a top-down diagram)", at
   d.nodes.map((n) => [n.id, n.x, n.y]));
 check('a subgraph direction is written back', /subgraph Svc\["Services"\]\n    direction LR/.test(toMermaid(d)), toMermaid(d));
 
+// Other diagram types, read as flowcharts.
+d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
+check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&
+  d.nodes.find((n) => n.id === 'start_root').shape === 'start' && d.nodes.find((n) => n.id === 'end_root').shape === 'stop' &&
+  d.nodes.find((n) => n.id === 'Idle').label === 'Idle\nwaiting', [ids(d), edges(d)]);
+d = parseMermaid('block-beta\n  columns 3\n  a b:2\n  c space d\n  a --> d');
+check('a block diagram keeps its grid', at2(d, 'a').y === at2(d, 'b').y && at2(d, 'c').y > at2(d, 'a').y && at2(d, 'd').x > at2(d, 'b').x &&
+  at2(d, 'b').w > at2(d, 'a').w && edges(d) === 'a>d', d.nodes.map((n) => [n.id, n.x, n.y, n.w]));
+d = parseMermaid('flowchart LR\n  A -. maybe .- B');
+check('dotted link text without a head keeps no head', d.edges[0].head === 'none' && d.edges[0].label === 'maybe', d.edges[0]);
+
 // Groups.
 d = parseMermaid('flowchart TB\n  subgraph Outer\n    subgraph Inner\n      A --> B\n    end\n    C\n  end\n  D --> Inner');
 const g = (id) => d.groups.find((x) => x.id === id);
@@ -76,7 +88,7 @@ const SAMPLES = [
   'flowchart LR\n  PC --> IMEM[(Instr memory)]\n  IMEM -->|instr| DEC\n  DEC --> RF\n  RF -->|rs1| ALU{{ALU}}\n  ALU ==> PC\n  ALU --> DMEM[(Data memory)]\n  DMEM -.->|load| RF',
   'flowchart TD\n  A([Start]) --> B[Enter]\n  B --> C{Valid?}\n  C -->|No| D[Error]\n  D --> B\n  C -->|Yes| E[Done]',
   'flowchart TB\n  subgraph Cloud\n    subgraph VPC\n      App --> DB[(DB)]\n    end\n  end\n  User --> Cloud',
-  'flowchart LR\n  J1@{ shape: sm-circ } --> Q@{ shape: h-cyl, label: "FIFO" }\n  S@{ shape: cross-circ } --> J1',
+  'flowchart LR\n  J1@{ shape: f-circ } --> Q@{ shape: h-cyl, label: "FIFO" }\n  S@{ shape: cross-circ } --> J1',
   'flowchart LR\n  U@{ shape: person, label: "User" } --> W@{ shape: cloud, label: "Internet" } --> D@{ shape: lin-cyl, label: "Disk" }\n  W --> X@{ shape: fr-circ }\n  N@{ shape: brace, label: "a note" }',
 ];
 d = parseMermaid('flowchart LR\n  A@{ shape: database } --> B@{ shape: comment, label: "x" } --> C@{ shape: stop } --> E@{ shape: directory, label: "f" }');
@@ -106,9 +118,11 @@ for (const [text, want] of [['Attempts >= 3?', '"Attempts >= 3?"'], ['C# code', 
 check('older escapes still read', unquoteLabel('"a #gt; b #124; c"') === 'a > b | c', unquoteLabel('"a #gt; b #124; c"'));
 
 // For an LLM: symbols named, blocks in flow order.
-d = parseMermaid('flowchart LR\n  A --> J1@{ shape: sm-circ }\n  J1 --> S@{ shape: cross-circ }\n  H{{Hex}} --> A');
+d = parseMermaid('flowchart LR\n  %% J1 is a wire junction\n  A --> J1@{ shape: sm-circ }\n  J1 --> S@{ shape: cross-circ }\n  H{{Hex}} --> A');
 const out = toMermaid(d);
 check('junction and summing junction named in a comment', /%% .*J1 is a wire junction.*S is a summing junction/.test(out), out.split('\n')[1]);
+check('a junction from an older build (sm-circ + comment) stays a junction', d.nodes.find((n) => n.id === 'J1').shape === 'junction', d.nodes);
+check('a start dot is not called a junction', !/is a wire junction/.test(toMermaid(parseMermaid('flowchart LR\n  S@{ shape: sm-circ } --> A'))), '');
 check('a plain hexagon is not called a bus', !/H is a/.test(out), out.split('\n')[1]);
 
 console.log(failed ? failed + ' failed' : 'all passed');
