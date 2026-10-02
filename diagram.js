@@ -795,7 +795,8 @@ function applyLayout(d, layout) {
 // the loop round forever and fling it thousands of pixels out. `items` come in
 // the order they were written, and people write a flow in the order it runs,
 // so a loop is cut at a connector pointing back up the text ("show error -->
-// enter credentials"), the longest jump back first, and only while it still
+// enter credentials"), the longest jump back first (on a tie, the one written
+// later: the "go back" arrow comes after the step it leaves), and only while it still
 // closes a loop: `MUX --> ALU` written just after ALU is a forward step, not
 // feedback, once `ALU --> PC` has been cut. Within a layer, items sit near what
 // they connect to (barycentre sweeps), so connectors cross as little as
@@ -815,7 +816,7 @@ function layerItems(items, pairs) {
     return false;
   };
   links.map((l, k) => k).filter((k) => links[k][1] < links[k][0])
-    .sort((k, j) => (links[j][0] - links[j][1]) - (links[k][0] - links[k][1]))
+    .sort((k, j) => (links[j][0] - links[j][1]) - (links[k][0] - links[k][1]) || j - k)
     .forEach((k) => { if (reaches(links[k][1], links[k][0])) cut.add(k); });
   const forward = items.map(() => []);
   links.forEach(([a, b], k) => { if (!cut.has(k)) forward[a].push(b); });

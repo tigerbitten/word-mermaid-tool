@@ -22,7 +22,9 @@ itself (`render.js`) and the positions ride along as `%%` comment lines,
 keeping the saved text 100% valid Mermaid. The reader (`diagram.js`) is a
 small line-based parser for the flowchart subset we write plus the common
 things LLMs write. Anything the tool writes is checked against the real
-Mermaid 11 parser and renderer in the test pages.
+Mermaid 11 parser and renderer. `node test.js` checks the reader, the writer
+and the layout of pasted diagrams without a browser; run it after touching
+`diagram.js`.
 
 ## Style
 

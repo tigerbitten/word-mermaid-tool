@@ -196,6 +196,7 @@ real Word.
 | `editor.js` | Pointer interaction: drag, connect, resize, select, undo, pan/zoom |
 | `taskpane.html` | UI shell and every Office.js call |
 | `icon.svg` | The add-in icon; `icon-32.png` / `icon-64.png` are it exported at those sizes for the manifest |
+| `test.js` | `node test.js`: Mermaid in and out without a browser (what LLMs write, round trips, pasted-diagram layout, label escaping) |
 
 ### Every time you push
 
