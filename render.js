@@ -37,6 +37,7 @@ const SVG_STYLE = `
   .wm-edge-label { font-family: ${FONT_STACK}; font-size: ${DEFAULT_EDGE_FONT}px; fill: #333333;
                    text-anchor: middle; dominant-baseline: middle; }
   .wm-edge-label-bg { fill: #ffffff; stroke: none; }
+  .wm-port { font-family: ${FONT_STACK}; font-size: 10px; fill: #444444; dominant-baseline: middle; }
   .wm-group { fill: #f4f6fb; stroke: #6b7fb3; stroke-width: 1.5; stroke-dasharray: 8 4; }
   .wm-group-tab { fill: #6b7fb3; stroke: none; }
   .wm-group-title { font-family: ${FONT_STACK}; font-size: 12px; fill: #ffffff;
@@ -1323,7 +1324,7 @@ function labelBoxes(d, geom) {
   });
 }
 
-function drawEdge(parent, e, pts, index, box) {
+function drawEdge(parent, e, pts, index, box, pinLayer) {
   const g = el('g', { 'data-index': index, 'data-kind': 'edge' }, parent);
   // Two blocks dropped exactly on top of each other collapse the route to a
   // single point; there is nothing to draw and an arrowhead needs two.
@@ -1373,6 +1374,19 @@ function drawEdge(parent, e, pts, index, box) {
     if (e.color) head.style.fill = e.color;
   }
 
+  // Pin names, small, just inside the block where the connector meets it --
+  // the way a schematic labels a part's pins.
+  for (const [name, tip, from] of [[e.fromPort, pts[0], pts[1]], [e.toPort, pts[pts.length - 1], pts[pts.length - 2]]]) {
+    if (!name) continue;
+    const dist = Math.hypot(from.x - tip.x, from.y - tip.y) || 1;
+    const ix = (tip.x - from.x) / dist;   // pointing into the block
+    const iy = (tip.y - from.y) / dist;
+    const across = Math.abs(ix) > Math.abs(iy);
+    const t = el('text', { x: tip.x + ix * 5, y: tip.y + iy * 10, class: 'wm-port' }, pinLayer || g);
+    t.setAttribute('text-anchor', across ? (ix > 0 ? 'start' : 'end') : 'middle');
+    t.textContent = name;
+    if (e.color) t.style.fill = e.color;
+  }
   if (box) {
     el('rect', { x: box.x, y: box.y, width: box.w, height: box.h, class: 'wm-edge-label-bg' }, g);
     const text = labelText(g, box.lines, box.mid.x, box.mid.y, box.size, e.bold, 'wm-edge-label', DEFAULT_EDGE_FONT);
@@ -1387,13 +1401,16 @@ function drawDiagram(parent, d) {
   const groupLayer = el('g', { 'data-layer': 'groups' }, parent);
   const edgeLayer = el('g', { 'data-layer': 'edges' }, parent);
   const nodeLayer = el('g', { 'data-layer': 'nodes' }, parent);
+  // Pin names sit inside blocks, so over them.
+  const pinLayer = el('g', { 'data-layer': 'pins' });
 
   // Outer groups first, so a subgroup is drawn on top of the group it sits in.
   for (const g of d.groups.slice().sort((p, q) => groupDepth(d, p) - groupDepth(d, q))) if (g.w > 0) drawGroup(groupLayer, g);
   const geom = edgeGeometry(d);
   const labels = labelBoxes(d, geom);
-  geom.forEach((pts, i) => { if (pts) drawEdge(edgeLayer, d.edges[i], pts, i, labels[i]); });
+  geom.forEach((pts, i) => { if (pts) drawEdge(edgeLayer, d.edges[i], pts, i, labels[i], pinLayer); });
   for (const n of d.nodes) drawNode(nodeLayer, n);
+  parent.appendChild(pinLayer);
 }
 
 // Everything that gets drawn, not just the blocks: connectors can run outside

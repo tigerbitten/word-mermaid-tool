@@ -114,6 +114,11 @@ check('icon and image nodes kept', d.nodes[0].shape === 'icon' && d.nodes[0].ico
 d = parseMermaid('flowchart LR\n  A -->|yes| B\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% A 0,0 140x56\n%% B 400,0 140x56\n%% label 0 0.8');
 check('a label slid along its connector keeps its place', d.edges[0].labelAt === 0.8 && /%% label 0 0.8/.test(toMermaid(d)), toMermaid(d));
 
+d = parseMermaid('flowchart LR\n  RF --> ALU\n  ALU --> WB\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% RF 0,0 140x56\n%% ALU 200,0 140x56\n%% WB 400,0 140x56\n%% port 0 "rs 1" "a"\n%% port 1 "out" -');
+out = toMermaid(d);
+check('pin names kept, and said for an LLM', d.edges[0].fromPort === 'rs 1' && d.edges[0].toPort === 'a' && d.edges[1].fromPort === 'out' &&
+  /%% ports: RF\.rs 1 --> ALU\.a; ALU\.out --> WB/.test(out) && toMermaid(parseMermaid(out)) === out, out);
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&

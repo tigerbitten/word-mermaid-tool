@@ -85,6 +85,7 @@ let menuPoint = { x: 0, y: 0 };
 let spaceDown = false;    // Space held: any drag pans
 let lastDragMove = null;  // the latest pointermove of a drag, replayed while the view edge-pans
 let panFrame = 0;
+let lastPress = null;     // time and place of the last left press, for double clicks
 let pressAt = { x: 0, y: 0 }; // screen point of the last press on the canvas
 const EDGE_PAN = 28;      // screen px from the canvas edge where a drag starts scrolling the view
 
@@ -142,7 +143,6 @@ function initEditor(hostEl, onChange, onViewChange, onContextMenu, extra) {
     if (ev.key === ' ' && spaceDown) { spaceDown = false; if (!drag) svg.style.cursor = 'default'; }
   });
   svg.addEventListener('wheel', onWheel, { passive: false });
-  svg.addEventListener('dblclick', onDoubleClick);
   svg.addEventListener('contextmenu', onContext);
   svg.addEventListener('pointerleave', () => { if (ghost && !drag) { ghost = null; render(); } });
   window.addEventListener('keydown', onKeyDown);
@@ -1021,6 +1021,19 @@ function onPointerDown(ev) {
   }
   if (ev.button !== 0) return;
 
+  // A double click is recognised here, not from the browser's dblclick:
+  // each press redraws the canvas, the element pressed is replaced, and
+  // Chromium (Word on Windows) then never sends a dblclick at all.
+  const now = Date.now();
+  if (lastPress && now - lastPress.t < 450 && Math.hypot(ev.clientX - lastPress.x, ev.clientY - lastPress.y) < 6) {
+    lastPress = null;
+    // Kept from moving focus, or the text box about to open loses it at once.
+    ev.preventDefault();
+    onDoubleClick(ev);
+    return;
+  }
+  lastPress = { t: now, x: ev.clientX, y: ev.clientY };
+
   const role = ev.target.getAttribute && ev.target.getAttribute('data-role');
   const p = toModel(ev);
 
@@ -1789,7 +1802,16 @@ function onDoubleClick(ev) {
   const n = nodeAt(p, 6 / view.zoom);
   if (n) { beginLabelEdit(n); return; }
   const ei = edgeAt(p);
-  if (ei >= 0) { selEdge = ei; sel = new Set(); render(); editEdgeLabel(ei); return; }
+  if (ei >= 0) {
+    selEdge = ei; sel = new Set(); render();
+    // Near either end it names that end's pin; elsewhere it edits the text.
+    const pts = edgeGeometry(model)[ei];
+    const near = (q) => Math.hypot(q.x - p.x, q.y - p.y) < 24 / view.zoom + 6;
+    if (pts && !freeLine(model.edges[ei]) && near(pts[0])) editPort(ei, 'from');
+    else if (pts && !freeLine(model.edges[ei]) && near(pts[pts.length - 1])) editPort(ei, 'to');
+    else editEdgeLabel(ei);
+    return;
+  }
   const g = groupAt(p);
   if (g && p.y <= g.y + groupTitleH(g)) beginLabelEdit(g);
   // Double-clicking empty canvas does nothing. It used to create a block,
@@ -1808,12 +1830,26 @@ function editEdgeLabel(index) {
   beginLabelEdit(model.edges[index], undefined, { x: mid.x - 70, y: mid.y - 16, w: 140, h: 32 });
 }
 
+// The name of the pin a connector end is wired to (`rs1`, `out`), edited in
+// a small box at that end. Empty removes it.
+function editPort(index, end) {
+  const e = model.edges[index];
+  const pts = edgeGeometry(model)[index];
+  if (!e || !pts) return;
+  const at = end === 'from' ? pts[0] : pts[pts.length - 1];
+  const key = end === 'from' ? 'fromPort' : 'toPort';
+  beginLabelEdit({ label: e[key] || '', fontSize: 11, from: true }, undefined, { x: at.x - 40, y: at.y - 14, w: 80, h: 28 },
+    (v) => { if (model.edges.includes(e)) e[key] = v || undefined; });
+}
+
 // A textarea rather than an input so labels can wrap onto two lines, which
 // block diagrams need constantly. Enter commits; Shift+Enter is a line break.
 // `seed` is the character that triggered the edit when you just start typing
 // over a selected block. `box` overrides where the editor is placed, for
 // things (edges) that have no box of their own.
-function beginLabelEdit(item, seed, box) {
+// `apply`, when given, takes the edited text instead of item.label (a pin
+// name is edited this way).
+function beginLabelEdit(item, seed, box, apply) {
   if (item.shape && LABELLESS.has(item.shape)) return;   // a junction dot has no text to edit
   // Commit whatever was already open rather than refusing: double-clicking
   // straight from one block to the next has to just work. blur() only fires if
@@ -1858,6 +1894,10 @@ function beginLabelEdit(item, seed, box) {
     input.remove();
     // Undo, a load or a delete may have replaced the object while the editor
     // was open; writing to the orphan would silently go nowhere.
+    if (apply) {
+      if (input.value !== item.label) { pushUndo(); apply(input.value.trim()); commit(); }
+      return;
+    }
     const live = model.nodes.includes(item) || model.edges.includes(item) || model.groups.includes(item);
     if (live && input.value !== item.label) {
       pushUndo();

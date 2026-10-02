@@ -732,6 +732,9 @@
     if (info.edge) {
       const e = info.edge;
       act('Edit label', 'F2', () => editSelectedLabel());
+      // Pins: also by double-clicking near an end.
+      act('Name start pin…', '', () => editPort(getModel().edges.indexOf(e), 'from'));
+      act('Name end pin…', '', () => editPort(getModel().edges.indexOf(e), 'to'));
       const [dash, heads, width] = edgeControls(e);
       row('Line', dash);
       row('Arrowheads', heads);

@@ -515,6 +515,11 @@ function toMermaid(d) {
   for (const n of d.nodes) if (isPoint(n) && !grouped.has(n.id)) { lines.push('  ' + nodeDecl(n)); order.push(n); }
   const symbols = order.filter((n) => SYMBOL_MEANING[n.shape]).map((n) => n.id + ' is a ' + SYMBOL_MEANING[n.shape]);
   if (symbols.length) lines.splice(lines.indexOf('flowchart ' + direction) + 1, 0, '  %% ' + symbols.join('; '));
+  // Named pins, which Mermaid has no syntax for, said in a comment an LLM
+  // reads as written: `RF.rs1 --> ALU.a` is RF's pin rs1 wired to ALU's pin a.
+  const pinned = d.edges.filter((e) => e.fromPort || e.toPort)
+    .map((e) => e.from + (e.fromPort ? '.' + e.fromPort : '') + ' --> ' + e.to + (e.toPort ? '.' + e.toPort : ''));
+  if (pinned.length) lines.splice(lines.indexOf('flowchart ' + direction) + 1, 0, '  %% ports: ' + pinned.join('; '));
 
   // Connectors grouped by the block they leave, in that same order, so the
   // text reads as the flow does. Everything that refers to a connector by
@@ -571,6 +576,7 @@ function toMermaid(d) {
       lines.push('%% path ' + i + ' ' + e.points.map((p) => Math.round(p.x) + ',' + Math.round(p.y)).join(' '));
     }
     if (e.route === 'straight') lines.push('%% route ' + i + ' straight');
+    if (e.fromPort || e.toPort) lines.push('%% port ' + i + ' ' + (e.fromPort ? JSON.stringify(e.fromPort) : '-') + ' ' + (e.toPort ? JSON.stringify(e.toPort) : '-'));
     // Text slid along its connector by hand: how far along, 0 to 1.
     if (e.label && e.labelAt != null) lines.push('%% label ' + i + ' ' + e.labelAt);
   });
@@ -1052,6 +1058,7 @@ function parseMermaid(text) {
   const paths = {};
   const routes = {};
   const labelsAt = {};
+  const ports = {};
   const linkStyles = {};
   const styles = {};
   const classDefs = {};   // classDef name -> its style declaration
@@ -1132,6 +1139,8 @@ function parseMermaid(text) {
       });
       continue;
     }
+    const portMatch = line.match(/^%%\s+port\s+(\d+)\s+("(?:[^"\\]|\\.)*"|-)\s+("(?:[^"\\]|\\.)*"|-)\s*$/);
+    if (portMatch) { ports[+portMatch[1]] = [portMatch[2], portMatch[3]].map((v) => v === '-' ? null : JSON.parse(v)); continue; }
     const labelMatch = line.match(/^%%\s+label\s+(\d+)\s+([\d.]+)\s*$/);
     if (labelMatch) { labelsAt[+labelMatch[1]] = +labelMatch[2]; continue; }
     const routeMatch = line.match(/^%%\s+route\s+(\d+)\s+(straight|elbow)\s*$/);
@@ -1142,7 +1151,7 @@ function parseMermaid(text) {
       for (const m of line.matchAll(/([\p{L}\p{N}_-]+) is a wire junction/gu)) oldJunctions.add(m[1]);
       if (line.startsWith('%%{')) kept.init.push(line);
       // A comment of the writer's own (the symbol key) is remade on writing.
-      else if (line !== LAYOUT_HEADER && !/^%% [\p{L}\p{N}_-]+ is a (buffer\/driver|delay element|queue\/FIFO|summing junction|wire junction|bus bar)\b/u.test(line)) {
+      else if (line !== LAYOUT_HEADER && !line.startsWith('%% ports:') && !/^%% [\p{L}\p{N}_-]+ is a (buffer\/driver|delay element|queue\/FIFO|summing junction|wire junction|bus bar)\b/u.test(line)) {
         if (!inLayout) kept.comments.push(line);
       }
       if (line === LAYOUT_HEADER) inLayout = true;
@@ -1277,6 +1286,7 @@ function parseMermaid(text) {
     if (paths[i]) e.points = paths[i];
     if (routes[i]) e.route = routes[i];
     if (labelsAt[i] != null) e.labelAt = labelsAt[i];
+    if (ports[i]) { if (ports[i][0]) e.fromPort = ports[i][0]; if (ports[i][1]) e.toPort = ports[i][1]; }
   });
 
   // Node order is stacking order (front to back is what Bring to front
