@@ -10,10 +10,14 @@ Prototype. Word desktop on Windows and Mac.
 
 ## What it does
 
-- 23 shapes on the palette in three sections: blocks, hardware (mux, demux,
-  buffer, delay, queue/FIFO, summing junction, wire junction, bus bar) and
-  systems (memory, bus, document, decision, I/O…). Drag one onto the canvas —
-  a preview follows the pointer — or click one, then click where it goes.
+- Every Mermaid 11 shape, on the palette in sections: blocks, hardware (mux,
+  demux, buffer, delay, queue/FIFO, summing junction, wire junction, bus bar),
+  systems (memory, bus, document, decision, I/O…), architecture (cloud,
+  person, browser, terminal, bucket, folder, disk, note) and — folded under
+  **More**, click its heading — the rest of the flowchart symbols (manual
+  input, display, card, documents, stored data, loop limit, collate…). Drag
+  one onto the canvas — a preview follows the pointer — or click one, then
+  click where it goes.
 - **Select anything and a toolbar appears above it**, Miro-style: shape, fill,
   text size, bold, grouping for blocks; line style, arrowheads, thickness,
   colour, label size, bold and reverse for connectors. **Right-click** for
@@ -21,7 +25,12 @@ Prototype. Word desktop on Windows and Mac.
 - To rename a block: double-click it, press Enter or F2, or just select it and
   start typing. Enter or Esc finishes (keeping what you typed), Shift+Enter
   gives you a second line. Double-clicking a connector edits its label the
-  same way.
+  same way. A connector's text sits near its middle but off blocks, other
+  lines and bends; drag the text to slide it along the connector.
+- **Pins.** Double-click near either end of a connector (or right-click >
+  *Name start pin / Name end pin*) to name the pin it's wired to — `rs1`,
+  `out`, `a`. The name is drawn small inside the block where the line meets
+  it, as on a schematic.
 - **Click-click lines.** Click **Arrow** or **Line** in the palette, click
   where it starts — on a block's edge, or anywhere — then click where it ends.
   The line follows the pointer in between; Esc cancels.
@@ -49,8 +58,11 @@ Prototype. Word desktop on Windows and Mac.
   every connector at once.
 - To reroute a right-angled connector: drag any leg of it sideways; the path
   stays square. *Reset path* goes back to automatic routing.
-- Dragging a block snaps it into line with the blocks around it — edges and
-  centres — with a pink guide showing what it lined up with.
+- Placement is free, as in Miro: nothing snaps to a grid. Dragging a block
+  lines it up with the blocks around it — edges and centres — or spaces it
+  evenly beside its neighbours, once within a few pixels, with a pink guide
+  showing what it lined up with; resizing lines a side up or matches another
+  block's size the same way. Hold Alt to drag without guides.
 - Drag a corner or side handle to resize; hold Shift on a corner to keep the
   proportions. Shift- or Ctrl-click, or shift-drag a box, to multi-select.
   Hold Shift while dragging to move in a straight line. Alt- or Ctrl-drag
@@ -74,8 +86,11 @@ Prototype. Word desktop on Windows and Mac.
   edits apply when you go back to the canvas. Pasted diagrams are laid out
   for you: blocks sized to their text, groups kept together, and loops cut at
   their "go back" arrow so the flow reads top to bottom (or left to right).
-  Only flowcharts and block diagrams can be drawn; another kind is named and
-  refused.
+  Flowcharts are read in full, styles included (named and rgb colours,
+  borders, `classDef`s, `linkStyle default`), as are icon and image nodes
+  (`@{ icon: "fa:user" }` is drawn with a built-in glyph for the icon's
+  name). A **state diagram** or a **`block-beta`** grid is read as the
+  flowchart that draws it. Another kind is named and refused.
 - **Insert** drops the picture in. **Open** picks a
   diagram back up out of the document. **Update** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
@@ -143,10 +158,16 @@ entity are escaped. Hardware symbols Mermaid has no word for get one in a
 comment under the header (`%% J1 is a wire junction; ADD is a summing
 junction`), so an LLM knows what it's looking at.
 
-Everything else rides in standard Mermaid: fills and text sizes are `style`
-statements, connector thickness is a `linkStyle` statement, and a heavy
-connector is also written with Mermaid's own `==>` form so it stays heavy in
-other renderers. A diagram pasted in with a front-matter `title:` keeps it.
+Everything else rides in standard Mermaid: fills, borders and text sizes are
+`style` statements (a pasted `classDef` stays a class, so its name still says
+what the blocks have in common), connector thickness is a `linkStyle`
+statement, and a heavy connector is also written with Mermaid's own `==>`
+form so it stays heavy in other renderers. Circle and cross ends (`--o`,
+`x--x`) and longer links (`--->`) are kept. A diagram pasted in keeps its
+front matter, `%%{init}%%` directive, comments, `click` and `accTitle` lines.
+Pin names, which Mermaid has no syntax for, are spelled out in a comment
+(`%% ports: RF.rs1 --> ALU.a`) and recorded in a `%% port` line; text slid
+along a connector is a `%% label` line.
 
 ### Pointing an LLM at the diagrams
 
