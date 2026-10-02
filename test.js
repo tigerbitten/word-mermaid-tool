@@ -99,7 +99,7 @@ check('named and rgb colours read', d.nodes[0].fill === '#add8e6' && d.nodes[0].
   d.nodes[1].stroke === '#ff0000' && d.nodes[1].dash && d.nodes[1].color === '#8b0000' && d.groups[0].fill === '#fffbe6', d.nodes);
 check('classes, init, comments, config, acc and click written back', /classDef store fill:lightblue/.test(out) && /class A store/.test(out) &&
   /^---\ntitle: "T"\nconfig:\n  theme: neutral\n---\n%%\{init/.test(out) && /%% a note/.test(out) && /accTitle: Pay/.test(out) &&
-  /click A "https:\/\/x.y"/.test(out) && /style S fill:#fffbe6/.test(out) && /linkStyle default stroke:#808080/.test(out), out);
+  /click A "https:\/\/x.y"/.test(out) && /style S fill:#fffbe6/.test(out) && /linkStyle 0 stroke:#808080/.test(out), out);
 check('styled round trip is stable', toMermaid(parseMermaid(out)) === out, out);
 d = parseMermaid('flowchart LR\n  A --o B\n  A x--x C\n  A ---> D\n  A -..-> E');
 out = toMermaid(d);
