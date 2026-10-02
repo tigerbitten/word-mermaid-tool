@@ -790,29 +790,34 @@ function applyLayout(d, layout) {
 }
 
 // `items` in layers along the flow, each after everything that points to it
-// -- except along a connector that closes a loop (found depth-first, in the
-// order the items were written, so the loop breaks at its feedback arrow:
-// whoever writes `PC --> IMEM ... ALU --> PC` starts at PC), which would
-// otherwise push a loop round forever and fling it thousands of pixels out. Within a layer, items sit near what
+// -- except along a connector that closes a loop, which would otherwise push
+// the loop round forever and fling it thousands of pixels out. `items` come in
+// the order they were written, and people write a flow in the order it runs,
+// so a loop is cut at a connector pointing back up the text ("show error -->
+// enter credentials"), the longest jump back first, and only while it still
+// closes a loop: `MUX --> ALU` written just after ALU is a forward step, not
+// feedback, once `ALU --> PC` has been cut. Within a layer, items sit near what
 // they connect to (barycentre sweeps), so connectors cross as little as
 // possible. `pairs` are [from, to] indexes into `items`.
 function layerItems(items, pairs) {
   const n = items.length;
   const links = pairs.filter(([a, b]) => a !== b);
-  const succ = items.map(() => []);
-  for (const [a, b] of links) succ[a].push(b);
-  const state = new Array(n).fill(0);
-  const forward = items.map(() => []);
-  const visit = (a) => {
-    state[a] = 1;
-    for (const b of succ[a]) {
-      if (state[b] === 1) continue;           // closes a loop: not used for layering
-      forward[a].push(b);
-      if (!state[b]) visit(b);
+  const cut = new Set();
+  const reaches = (from, to) => {
+    const seen = new Set([from]);
+    const stack = [from];
+    while (stack.length) {
+      const a = stack.pop();
+      if (a === to) return true;
+      links.forEach((l, k) => { if (!cut.has(k) && l[0] === a && !seen.has(l[1])) { seen.add(l[1]); stack.push(l[1]); } });
     }
-    state[a] = 2;
+    return false;
   };
-  for (let i = 0; i < n; i++) if (!state[i]) visit(i);
+  links.map((l, k) => k).filter((k) => links[k][1] < links[k][0])
+    .sort((k, j) => (links[j][0] - links[j][1]) - (links[k][0] - links[k][1]))
+    .forEach((k) => { if (reaches(links[k][1], links[k][0])) cut.add(k); });
+  const forward = items.map(() => []);
+  links.forEach(([a, b], k) => { if (!cut.has(k)) forward[a].push(b); });
 
   const depth = new Array(n).fill(0);
   const indeg = new Array(n).fill(0);
@@ -853,6 +858,9 @@ function layerItems(items, pairs) {
 // x0,y0; a group's own contents are laid out first, inside it. Each layer is
 // centred across the flow. Returns the size taken.
 function layoutBlock(d, items, x0, y0) {
+  // In the order written: a group where its first block was written.
+  const written = (it) => Math.min(...(it.members ? groupNodeIds(d, it) : [it.id]).map((id) => d.nodes.findIndex((m) => m.id === id)));
+  items = items.slice().sort((p, q) => written(p) - written(q));
   const across = d.direction === 'LR' || d.direction === 'RL';
   const GAP_ALONG = across ? 80 : 60;
   const GAP_ACROSS = across ? 40 : 60;

@@ -366,6 +366,18 @@ function rayToOutline(n, from, dir) {
   return best === null ? null : { x: from.x + dir.x * best, y: from.y + dir.y * best };
 }
 
+// Which side a connector leaves `a` by for `b`: the side facing it. A
+// decision's branch to a block off to one side leaves from that side's corner,
+// the flowchart convention, rather than out of the bottom tip and round.
+function exitSide(a, b) {
+  const side = facingSide(a, b);
+  if (a.shape !== 'diamond') return side;
+  const c = centerOf(b);
+  if ((side === 'n' || side === 's') && (c.x < a.x || c.x > a.x + a.w)) return c.x > a.x ? 'e' : 'w';
+  if ((side === 'e' || side === 'w') && (c.y < a.y || c.y > a.y + a.h)) return c.y > a.y ? 's' : 'n';
+  return side;
+}
+
 // Where the line from a node's centre towards `toward` leaves its outline.
 function outlinePoint(n, toward) {
   const c = centerOf(n);
@@ -639,7 +651,7 @@ function edgeRoutes(d) {
     const ta = e.toAnchor || {};
     return {
       a, b,
-      from: { side: fa.side || facingSide(a, b), t: fa.t, other: b, pinned: fa.t != null },
+      from: { side: fa.side || exitSide(a, b), t: fa.t, other: b, pinned: fa.t != null },
       to: { side: ta.side || facingSide(b, a), t: ta.t, other: a, pinned: ta.t != null },
     };
   });
