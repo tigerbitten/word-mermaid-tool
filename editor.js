@@ -321,13 +321,14 @@ function drawEdgeChrome(s) {
   // dragged. Purely visual: the press lands on the connector itself. Where the
   // label sits the grip would cover the text, so the grip goes at the leg's
   // end instead.
-  const labelMid = e.label ? longestSegmentMidpoint(pts) : null;
+  const labelBox = labelBoxes(model)[selEdge];
+  const labelMid = labelBox ? labelBox.mid : null;
   for (let j = 1; j < pts.length; j++) {
     let a = pts[j - 1];
     let b = pts[j];
     if (Math.hypot(b.x - a.x, b.y - a.y) < 24 * s) continue;
-    if (labelMid && Math.abs((a.x + b.x) / 2 - labelMid.x) < 0.5 && Math.abs((a.y + b.y) / 2 - labelMid.y) < 0.5) {
-      const box = edgeLabelBox(e, pts);
+    if (labelMid && distToSeg(labelMid, a, b) < 0.5) {
+      const box = labelBox;
       const past = Math.abs(a.y - b.y) < 0.5 ? box.w / 2 + 14 * s : box.h / 2 + 14 * s;
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len / 2 < past + 10 * s) continue;
@@ -450,15 +451,13 @@ function distToSeg(p, a, b) {
 // written on a connector has to pick the connector.
 function edgeAt(p) {
   const geom = edgeGeometry(model);
+  const labels = labelBoxes(model, geom);
   for (let i = geom.length - 1; i >= 0; i--) {
     const pts = geom[i];
     if (!pts || pts.length < 2) continue;
     for (let j = 1; j < pts.length; j++) if (distToSeg(p, pts[j - 1], pts[j]) < 7 / view.zoom + 2) return i;
-    const e = model.edges[i];
-    if (e.label) {
-      const b = edgeLabelBox(e, pts);
-      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return i;
-    }
+    const b = labels[i];
+    if (b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return i;
   }
   return -1;
 }
@@ -771,7 +770,7 @@ function applyToEdge(fn) {
 // Back to automatic routing. The ports stay pinned -- they were chosen by
 // hand, and only the bends are being thrown away.
 function resetEdgePath() {
-  applyToEdge((e) => { e.points = null; });
+  applyToEdge((e) => { e.points = null; e.labelAt = null; });
 }
 
 // Straight line <-> right angles. The ports and any hand-drawn bends are kept,
@@ -1080,7 +1079,11 @@ function onPointerDown(ev) {
     const route = edgeRoutes(model)[ei];
     const k = legAt(route, p);
     const ends = [nodeById(model, e.from), nodeById(model, e.to)];
-    if (freeLine(e)) {
+    const box = labelBoxes(model)[ei];
+    if (box && p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h) {
+      // Pressing on a connector's text slides the text along the connector.
+      drag = { mode: 'label', edge: e, pts: edgeGeometry(model)[ei], grab: fractionAlong(edgeGeometry(model)[ei], p) - box.t };
+    } else if (freeLine(e)) {
       // A line attached to nothing is picked up and moved whole, like any
       // other object on the board.
       drag = { mode: 'line', start: p, ends: ends.map((n) => ({ n, x: n.x, y: n.y })),
@@ -1557,6 +1560,12 @@ function onPointerMove(ev) {
     render();
     return;
   }
+  if (drag.mode === 'label') {
+    const t = Math.max(0.02, Math.min(0.98, fractionAlong(drag.pts, p) - drag.grab));
+    drag.edge.labelAt = Math.round(t * 100) / 100;
+    render();
+    return;
+  }
   if (drag.mode === 'segment') {
     // Shift while dragging a connector straightens it, as it does while
     // dragging a line end.
@@ -1794,7 +1803,8 @@ function onDoubleClick(ev) {
 function editEdgeLabel(index) {
   const pts = edgeGeometry(model)[index];
   if (!pts) return;
-  const mid = longestSegmentMidpoint(pts);
+  const box = labelBoxes(model)[index];
+  const mid = box ? box.mid : pointAlong(pts, 0.5);
   beginLabelEdit(model.edges[index], undefined, { x: mid.x - 70, y: mid.y - 16, w: 140, h: 32 });
 }
 

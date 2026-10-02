@@ -571,6 +571,8 @@ function toMermaid(d) {
       lines.push('%% path ' + i + ' ' + e.points.map((p) => Math.round(p.x) + ',' + Math.round(p.y)).join(' '));
     }
     if (e.route === 'straight') lines.push('%% route ' + i + ' straight');
+    // Text slid along its connector by hand: how far along, 0 to 1.
+    if (e.label && e.labelAt != null) lines.push('%% label ' + i + ' ' + e.labelAt);
   });
 
   return lines.join('\n');
@@ -1049,6 +1051,7 @@ function parseMermaid(text) {
   const anchors = {};
   const paths = {};
   const routes = {};
+  const labelsAt = {};
   const linkStyles = {};
   const styles = {};
   const classDefs = {};   // classDef name -> its style declaration
@@ -1129,6 +1132,8 @@ function parseMermaid(text) {
       });
       continue;
     }
+    const labelMatch = line.match(/^%%\s+label\s+(\d+)\s+([\d.]+)\s*$/);
+    if (labelMatch) { labelsAt[+labelMatch[1]] = +labelMatch[2]; continue; }
     const routeMatch = line.match(/^%%\s+route\s+(\d+)\s+(straight|elbow)\s*$/);
     if (routeMatch) { routes[+routeMatch[1]] = routeMatch[2]; continue; }
     // Builds before v27 wrote a wire junction as `sm-circ`, Mermaid's start
@@ -1271,6 +1276,7 @@ function parseMermaid(text) {
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
     if (paths[i]) e.points = paths[i];
     if (routes[i]) e.route = routes[i];
+    if (labelsAt[i] != null) e.labelAt = labelsAt[i];
   });
 
   // Node order is stacking order (front to back is what Bring to front

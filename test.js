@@ -111,6 +111,9 @@ check('icon and image nodes kept', d.nodes[0].shape === 'icon' && d.nodes[0].ico
   /U@\{ icon: "fa:user", form: "circle", label: "User" \}/.test(out) && /I@\{ img: "https:\/\/x.y\/a.png", label: "Logo" \}/.test(out) &&
   /M\["fa:fa-car Car"\]/.test(out), out);
 
+d = parseMermaid('flowchart LR\n  A -->|yes| B\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% A 0,0 140x56\n%% B 400,0 140x56\n%% label 0 0.8');
+check('a label slid along its connector keeps its place', d.edges[0].labelAt === 0.8 && /%% label 0 0.8/.test(toMermaid(d)), toMermaid(d));
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&

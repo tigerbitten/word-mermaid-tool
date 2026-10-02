@@ -1234,28 +1234,96 @@ function trimEnd(pts, amount) {
 
 // Labels go on the longest leg rather than at the path's middle index, which
 // often lands exactly on a corner or under an arrowhead.
-function longestSegmentMidpoint(pts) {
-  let best = 1;
-  let bestLen = -1;
-  for (let i = 1; i < pts.length; i++) {
-    const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    if (len > bestLen) { bestLen = len; best = i; }
-  }
-  return { x: (pts[best].x + pts[best - 1].x) / 2, y: (pts[best].y + pts[best - 1].y) / 2 };
-}
 
 // Where an edge's label box sits, with its lines. Shared by drawing, the export
 // bounds and the editor, so the label is never cropped or mis-hit.
-function edgeLabelBox(e, pts) {
-  const size = e.fontSize || DEFAULT_EDGE_FONT;
-  const lines = String(e.label).split('\n');
-  const mid = longestSegmentMidpoint(pts);
-  const w = Math.max(...lines.map((l) => textWidth(l, size, e.bold))) + 10;
-  const h = lines.length * lineH(size) + 4;
-  return { x: mid.x - w / 2, y: mid.y - h / 2, w, h, mid, lines, size };
+// The point `t` (0 to 1) of the way along a path, and the leg it's on.
+function pointAlong(pts, t) {
+  const lens = pts.slice(1).map((q, i) => Math.hypot(q.x - pts[i].x, q.y - pts[i].y));
+  let left = Math.max(0, Math.min(1, t)) * lens.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < lens.length; i++) {
+    if (left <= lens[i] || i === lens.length - 1) {
+      const k = lens[i] ? Math.min(1, left / lens[i]) : 0;
+      return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * k, y: pts[i].y + (pts[i + 1].y - pts[i].y) * k, leg: i };
+    }
+    left -= lens[i];
+  }
+  return { x: pts[0].x, y: pts[0].y, leg: 0 };
 }
 
-function drawEdge(parent, e, pts, index) {
+// How far along a path (0 to 1) its nearest point to `p` is.
+function fractionAlong(pts, p) {
+  let total = 0, best = Infinity, at = 0;
+  const lens = pts.slice(1).map((q, i) => Math.hypot(q.x - pts[i].x, q.y - pts[i].y));
+  const sum = lens.reduce((a, b) => a + b, 0) || 1;
+  for (let i = 0; i < lens.length; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const k = lens[i] ? Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (lens[i] * lens[i]))) : 0;
+    const dist = Math.hypot(a.x + (b.x - a.x) * k - p.x, a.y + (b.y - a.y) * k - p.y);
+    if (dist < best) { best = dist; at = (total + k * lens[i]) / sum; }
+    total += lens[i];
+  }
+  return at;
+}
+
+function labelBoxAt(e, pts, t) {
+  const size = e.fontSize || DEFAULT_EDGE_FONT;
+  const lines = String(e.label).split('\n');
+  const mid = pointAlong(pts, t);
+  const w = Math.max(...lines.map((l) => textWidth(l, size, e.bold))) + 10;
+  const h = lines.length * lineH(size) + 4;
+  return { x: mid.x - w / 2, y: mid.y - h / 2, w, h, mid, lines, size, t };
+}
+
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+// Where each connector's text goes. One moved by hand stays where it was put
+// (`labelAt`, a fraction along the connector). The rest are placed in turn:
+// near the middle of their connector, but off blocks, off other connectors
+// and off text already placed -- a label sitting on a crossing reads as
+// belonging to either line.
+function labelBoxes(d, geom) {
+  geom = geom || edgeGeometry(d);
+  const blocks = d.nodes.filter((n) => !isPoint(n) && n.w && n.h);
+  const placed = [];
+  return d.edges.map((e, i) => {
+    const pts = geom[i];
+    if (!e.label || !pts || pts.length < 2) return null;
+    let best;
+    if (e.labelAt != null) best = labelBoxAt(e, pts, e.labelAt);
+    else {
+      const lens = pts.slice(1).map((q, k) => Math.hypot(q.x - pts[k].x, q.y - pts[k].y));
+      const sum = lens.reduce((a, b) => a + b, 0) || 1;
+      const cands = [0.5];
+      let at = 0;
+      lens.forEach((len) => { for (const f of [0.5, 0.3, 0.7]) cands.push((at + len * f) / sum); at += len; });
+      let bestCost = Infinity;
+      for (const t of cands) {
+        const box = labelBoxAt(e, pts, t);
+        const pad = { x: box.x - 2, y: box.y - 2, w: box.w + 4, h: box.h + 4 };
+        // Off the middle costs a little; sticking out past a bend more.
+        let cost = Math.abs(t - 0.5) * 60;
+        // Room each side of its centre on its own leg: none and it hides a bend.
+        const leg = pointAlong(pts, t).leg;
+        const along = Math.abs(pts[leg].y - pts[leg + 1].y) < 0.5 ? box.w : box.h;
+        const room = Math.min(Math.hypot(box.mid.x - pts[leg].x, box.mid.y - pts[leg].y),
+          Math.hypot(box.mid.x - pts[leg + 1].x, box.mid.y - pts[leg + 1].y));
+        if (room < along / 2 + 6) cost += 150;
+        for (const n of blocks) if (overlaps(pad, n)) cost += 1000;
+        for (const q of placed) if (overlaps(pad, q)) cost += 1000;
+        geom.forEach((other, j) => {
+          if (j === i || !other) return;
+          for (let k = 1; k < other.length; k++) if (crossesBox(other[k - 1], other[k], pad)) { cost += 200; break; }
+        });
+        if (cost < bestCost) { bestCost = cost; best = box; }
+      }
+    }
+    placed.push(best);
+    return best;
+  });
+}
+
+function drawEdge(parent, e, pts, index, box) {
   const g = el('g', { 'data-index': index, 'data-kind': 'edge' }, parent);
   // Two blocks dropped exactly on top of each other collapse the route to a
   // single point; there is nothing to draw and an arrowhead needs two.
@@ -1305,8 +1373,7 @@ function drawEdge(parent, e, pts, index) {
     if (e.color) head.style.fill = e.color;
   }
 
-  if (e.label) {
-    const box = edgeLabelBox(e, pts);
+  if (box) {
     el('rect', { x: box.x, y: box.y, width: box.w, height: box.h, class: 'wm-edge-label-bg' }, g);
     const text = labelText(g, box.lines, box.mid.x, box.mid.y, box.size, e.bold, 'wm-edge-label', DEFAULT_EDGE_FONT);
     if (e.color) text.style.fill = e.color;
@@ -1323,7 +1390,9 @@ function drawDiagram(parent, d) {
 
   // Outer groups first, so a subgroup is drawn on top of the group it sits in.
   for (const g of d.groups.slice().sort((p, q) => groupDepth(d, p) - groupDepth(d, q))) if (g.w > 0) drawGroup(groupLayer, g);
-  edgeGeometry(d).forEach((pts, i) => { if (pts) drawEdge(edgeLayer, d.edges[i], pts, i); });
+  const geom = edgeGeometry(d);
+  const labels = labelBoxes(d, geom);
+  geom.forEach((pts, i) => { if (pts) drawEdge(edgeLayer, d.edges[i], pts, i, labels[i]); });
   for (const n of d.nodes) drawNode(nodeLayer, n);
 }
 
@@ -1353,13 +1422,16 @@ function diagramBounds(d) {
   for (const g of d.groups) {
     if (g.w > 0) add(g.x, g.y, g.x + groupTabWidth(g), g.y + groupTitleH(g));
   }
-  edgeGeometry(d).forEach((pts, i) => {
+  const geom = edgeGeometry(d);
+  const labels = labelBoxes(d, geom);
+  geom.forEach((pts, i) => {
     if (!pts || pts.length < 2) return;
     const e = d.edges[i];
     // Half the stroke, or the arrowhead's half-width where that's wider.
     const m = Math.max((e.width || DEFAULT_EDGE_W) / 2, e.head === 'none' ? 0 : arrowSize(e).half) + 1;
     for (const p of pts) add(p.x - m, p.y - m, p.x + m, p.y + m);
-    if (e.label) { const b = edgeLabelBox(e, pts); add(b.x, b.y, b.x + b.w, b.y + b.h); }
+    const b = labels[i];
+    if (b) add(b.x, b.y, b.x + b.w, b.y + b.h);
   });
   if (!xs.length) return { x: 0, y: 0, w: 1, h: 1 };
   const x0 = Math.min(...xs);

@@ -598,7 +598,7 @@
       // Text controls only for a connector that has text: most don't.
       if (e.label) add(edgeFontStepper(e), boldButton(e.bold), sep());
       add(button('⇄', reverseEdge, 'Reverse direction'));
-      if (e.points && e.route !== 'straight') add(button('↺', resetEdgePath, 'Reset path to automatic'));
+      if ((e.points && e.route !== 'straight') || e.labelAt != null) add(button('↺', resetEdgePath, 'Reset path and text position to automatic'));
       add(sep(), more);
     } else if (info.nodes.length) {
       const texty = info.nodes.filter((n) => !LABELLESS.has(n.shape));
