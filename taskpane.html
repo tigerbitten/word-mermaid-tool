@@ -138,7 +138,7 @@
   @media (max-width: 420px) {
     #palette { width: 3.6rem; grid-template-columns: 1fr; }
     .pal-item span { display: none; }
-    .pal-head { font-size: 0.55rem; padding: 0.4rem 0 0.1rem; text-align: center; letter-spacing: 0; }
+    .pal-head { font-size: 0.5rem; padding: 0.4rem 0 0.1rem; text-align: center; letter-spacing: 0; overflow: hidden; }
   }
 </style>
 </head>
@@ -304,8 +304,9 @@
       return icon;
     }
     const [dw, dh] = defaultSize(shape);
-    // Wiring symbols are drawn at their own proportions, centred.
-    const box = LABELLESS.has(shape)
+    // Wiring symbols, and shapes with a natural size of their own (a
+    // person, a cloud), are drawn at their own proportions, centred.
+    const box = LABELLESS.has(shape) || SHAPE_SIZE[shape]
       ? (() => { const k = Math.min(20 / dh, 34 / dw, 1.4); return { x: 20 - dw * k / 2, y: 13 - dh * k / 2, w: dw * k, h: dh * k }; })()
       : { x: 3, y: 3, w: 34, h: 20 };
     const parts = shapeElement({ ...box, shape });
