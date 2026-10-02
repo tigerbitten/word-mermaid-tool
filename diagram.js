@@ -1351,7 +1351,18 @@ function applyLayout(d, layout, invisible) {
   if (unplaced.length === d.nodes.length) {
     const grouped = new Set(d.groups.flatMap((g) => g.members));
     const links = d.edges.map((e) => [e.from, e.to]).concat(invisible);
-    layoutBlock(d, d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40, d.direction, links);
+    const top = d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id)));
+    const size = layoutBlock(d, top, 40, 40, d.direction, links);
+    // A row of sideways subgraphs comes out many times wider than tall, and
+    // Word shrinks it to the column: its text ends up a few points high. The
+    // subgraphs are stacked instead, each still running sideways inside.
+    const sideways = d.direction === 'LR' || d.direction === 'RL';
+    const groups = top.filter((it) => it.members && !it.direction);
+    if (sideways && size.w > 4 * size.h && groups.length > 1) {
+      groups.forEach((g) => { g.direction = d.direction; });
+      layoutBlock(d, top, 40, 40, 'TB', links);
+      groups.forEach((g) => { delete g.direction; });
+    } else if (!d.groups.length) wrapLong(d, size);
   } else if (unplaced.length) {
     const placed = d.nodes.filter((n) => !unplaced.includes(n));
     const bottom = Math.max(...placed.map((n) => n.y + n.h)) + 60;
@@ -1364,6 +1375,40 @@ function applyLayout(d, layout, invisible) {
     }));
   }
   fitGroups(d);
+}
+
+// A long chain (a 15-step pipeline written LR) comes out as one strip far
+// wider than the page, and Word shrinks its text to nothing. Past about 1000px
+// (text under 6pt at full column width) it is wrapped: cut between stages
+// into rows read left to right, top to bottom (columns, for a long top-down
+// flow). Only for diagrams with no subgraphs, whose blocks can be moved freely.
+const WRAP_AT = 1000;
+function wrapLong(d, size) {
+  const across = d.direction === 'LR' || d.direction === 'RL';
+  const [len, wide, pos, cross, crossSize] = across ? [size.w, size.h, 'x', 'y', 'h'] : [size.h, size.w, 'y', 'x', 'w'];
+  if (len < WRAP_AT || len < 3 * wide) return;
+  const parts = Math.min(6, Math.ceil(len / (WRAP_AT * 0.55)));
+  // The stages, by where each block starts along the flow. Only a plain
+  // chain, one block a stage, is wrapped: cutting a flow that branches
+  // scatters its branches and crosses their connectors.
+  const starts = [...new Set(d.nodes.map((n) => Math.round(n[pos])))].sort((a, b) => a - b);
+  if (starts.length !== d.nodes.length) return;
+  // ...and only with every connector joining neighbouring stages: a loop back
+  // (a datapath's feedback) would have to cross the rows to get home.
+  const stage = new Map(d.nodes.map((n) => [n.id, starts.indexOf(Math.round(n[pos]))]));
+  if (d.edges.some((e) => Math.abs(stage.get(e.from) - stage.get(e.to)) !== 1)) return;
+  const reversed = d.direction === 'RL' || d.direction === 'BT';
+  const per = Math.ceil(starts.length / parts);
+  const rowOf = new Map(starts.map((v, i) => [v, Math.floor((reversed ? starts.length - 1 - i : i) / per)]));
+  const rowStart = [];
+  for (const [v, r] of rowOf) rowStart[r] = rowStart[r] == null ? v : (reversed ? Math.max(rowStart[r], v) : Math.min(rowStart[r], v));
+  const first = reversed ? Math.max(...starts) : Math.min(...starts);
+  const band = Math.max(...d.nodes.map((n) => n[cross] + n[crossSize])) - Math.min(...d.nodes.map((n) => n[cross])) + 70;
+  for (const n of d.nodes) {
+    const r = rowOf.get(Math.round(n[pos]));
+    n[pos] += first - rowStart[r];
+    n[cross] += r * band;
+  }
 }
 
 // `items` in layers along the flow, each after everything that points to it
@@ -1478,8 +1523,28 @@ function layoutBlock(d, items, x0, y0, direction, links) {
 
   const span = (layer) => layer.reduce((sum, it) => sum + (across ? sizes.get(it).h : sizes.get(it).w), 0) + GAP_ACROSS * (layer.length - 1);
   const widest = Math.max(0, ...layers.map(span));
+  // Room along the flow for the connector text between two neighbouring
+  // layers: labels on connectors between the same two items sit side by side.
+  const layerOf = new Map();
+  layers.forEach((l, k) => l.forEach((it) => layerOf.set(it, k)));
+  const labelRoom = (k) => {
+    if (typeof textWidth !== 'function') return 0;
+    const per = new Map();
+    for (const e of d.edges) {
+      if (!e.label || !home.has(e.from) || !home.has(e.to)) continue;
+      const a = items[home.get(e.from)], b = items[home.get(e.to)];
+      const la = layerOf.get(a), lb = layerOf.get(b);
+      if (Math.min(la, lb) !== k || Math.abs(la - lb) !== 1) continue;
+      const size = e.fontSize || DEFAULT_EDGE_FONT;
+      const lines = String(e.label).split('\n');
+      const len = across ? Math.max(...lines.map((l) => textWidth(l, size, e.bold))) + 10 : lines.length * lineH(size) + 4;
+      const key = [a.id, b.id].sort().join(' ');
+      per.set(key, (per.get(key) || 0) + len + 8);
+    }
+    return per.size ? Math.max(...per.values()) + 2 * STUB + 8 : 0;
+  };
   let along = 0;
-  for (const layer of layers) {
+  for (const [k, layer] of layers.entries()) {
     let side = (widest - span(layer)) / 2;
     const thick = Math.max(...layer.map((it) => (across ? sizes.get(it).w : sizes.get(it).h)));
     for (const it of layer) {
@@ -1495,9 +1560,9 @@ function layoutBlock(d, items, x0, y0, direction, links) {
       } else { it.x = x; it.y = y; }
       side += (across ? sz.h : sz.w) + GAP_ACROSS;
     }
-    along += thick + GAP_ALONG;
+    along += thick + Math.max(GAP_ALONG, labelRoom(k));
   }
-  along = Math.max(0, along - GAP_ALONG);
+  along = Math.max(0, along - Math.max(GAP_ALONG, labelRoom(layers.length - 1)));
   return across ? { w: along, h: widest } : { w: widest, h: along };
 }
 

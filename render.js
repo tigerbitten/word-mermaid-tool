@@ -676,7 +676,6 @@ function outlineOf(n) {
     case 'collate': return [{ x, y }, { x: x + w, y }, { x: cx, y: cy }, { x: x + w, y: y + h }, { x, y: y + h }, { x: cx, y: cy }];
     case 'manual_file': return [{ x, y }, { x: x + w, y }, { x: cx, y: y + h }];
     case 'manual_input': { const sl = Math.min(14, h * 0.3); return [{ x, y: y + sl }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }]; }
-    case 'bolt': return [{ x: x + w * 0.62, y }, { x: x + w * 0.9, y: y + h * 0.38 }, { x: x + w * 0.3, y: y + h }, { x: x + w * 0.12, y: y + h * 0.58 }];
     case 'flag':
       return [{ x: x + w, y }, { x: x + w, y: y + h }].concat(Array.from({ length: 13 }, (_, k) => {
         const t = 1 - k / 12;
@@ -993,7 +992,12 @@ function joinOrthogonal(pts) {
   return out;
 }
 
-function selfLoopPoints(n) {
+function selfLoopPoints(n, direction) {
+  // Off the top when the flow runs sideways: the right side is where the next step's connector leaves.
+  if (direction === 'LR' || direction === 'RL') {
+    const x = n.x + n.w - 20;
+    return [{ x: x - 24, y: n.y }, { x: x - 24, y: n.y - 26 }, { x, y: n.y - 26 }, { x, y: n.y }];
+  }
   const cy = n.y + n.h / 2;
   const r = 26;
   return [
@@ -1149,7 +1153,7 @@ function edgeRoutes(d) {
 
   return slots.map((s, i) => {
     if (!s) return null;
-    if (s.self) return { self: true, raw: selfLoopPoints(s.a) };
+    if (s.self) return { self: true, raw: selfLoopPoints(s.a, d.direction) };
     if (s.straight) {
       const pinned = (n, an) => an && an.t != null ? anchorPoint(n, an.side, an.t) : null;
       let p0 = pinned(s.a, s.fa);
@@ -1292,18 +1296,41 @@ function labelBoxes(d, geom) {
     if (!e.label || !pts || pts.length < 2) return null;
     let best;
     if (e.labelAt != null) best = labelBoxAt(e, pts, e.labelAt);
+    else if (e.from === e.to) {
+      // A loop's text goes just outside its far leg, not on it: on it, it hides the loop.
+      best = labelBoxAt(e, pts, 0.5);
+      const up = Math.abs(pts[1].y - pts[2].y) < 0.5;
+      const dx = up ? 0 : best.w / 2 + 3, dy = up ? -(best.h / 2 + 3) : 0;
+      best = { ...best, x: best.x + dx, y: best.y + dy, mid: { x: best.mid.x + dx, y: best.mid.y + dy } };
+    }
     else {
       const lens = pts.slice(1).map((q, k) => Math.hypot(q.x - pts[k].x, q.y - pts[k].y));
       const sum = lens.reduce((a, b) => a + b, 0) || 1;
       const cands = [0.5];
       let at = 0;
-      lens.forEach((len) => { for (const f of [0.5, 0.3, 0.7]) cands.push((at + len * f) / sum); at += len; });
+      lens.forEach((len) => { for (const f of [0.5, 0.3, 0.7, 0.15, 0.85]) cands.push((at + len * f) / sum); at += len; });
       let bestCost = Infinity;
+      // Each spot on the line, and beside it: a label beside a vertical line
+      // leaves its neighbour (the way back of a pair) and its arrowhead clear.
+      const spots = [];
       for (const t of cands) {
-        const box = labelBoxAt(e, pts, t);
+        const on = labelBoxAt(e, pts, t);
+        spots.push([on, 0]);
+        const leg = pointAlong(pts, t).leg;
+        const vertical = Math.abs(pts[leg].x - pts[leg + 1].x) < 0.5;
+        for (const sgn of [-1, 1]) {
+          const dx = vertical ? sgn * (on.w / 2 + 4) : 0, dy = vertical ? 0 : sgn * (on.h / 2 + 3);
+          spots.push([{ ...on, x: on.x + dx, y: on.y + dy, mid: { x: on.mid.x + dx, y: on.mid.y + dy } }, 40]);
+        }
+      }
+      const tip = pts[pts.length - 1];
+      for (const [box, extra] of spots) {
+        const t = box.t;
         const pad = { x: box.x - 2, y: box.y - 2, w: box.w + 4, h: box.h + 4 };
         // Off the middle costs a little; sticking out past a bend more.
-        let cost = Math.abs(t - 0.5) * 60;
+        let cost = Math.abs(t - 0.5) * 60 + extra;
+        // Over the arrowhead hides which way the connector points.
+        if (overlaps(pad, { x: tip.x - 10, y: tip.y - 10, w: 20, h: 20 })) cost += 300;
         // Room each side of its centre on its own leg: none and it hides a bend.
         const leg = pointAlong(pts, t).leg;
         const along = Math.abs(pts[leg].y - pts[leg + 1].y) < 0.5 ? box.w : box.h;

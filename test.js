@@ -170,6 +170,10 @@ d = parseMermaid('flowchart TD\n  A --> B\n  B --> C{ok?}\n  C -->|No| D\n  D --
 const y = (id) => d.nodes.find((n) => n.id === id).y;
 check('an error step sits beside the check that leads to it, not at the bottom', y('D') === y('E'), d.nodes.map((n) => [n.id, n.y]));
 
+d = parseMermaid('flowchart LR\n  ' + Array.from({ length: 12 }, (_, i) => 'S' + i).join(' --> '));
+check('a long plain chain wraps into rows', new Set(d.nodes.map((n) => n.y)).size > 1 && Math.max(...d.nodes.map((n) => n.x + n.w)) < 1100 &&
+  d.nodes[0].y < d.nodes[11].y, d.nodes.map((n) => [n.id, n.x, n.y]));
+
 // Labels: written as typed, escaped only where Mermaid would misread them.
 for (const [text, want] of [['Attempts >= 3?', '"Attempts >= 3?"'], ['C# code', '"C# code"'], ['a|b', '"a|b"'],
   ['say "hi"', '"say #quot;hi#quot;"'], ['<b>x</b>', '"#lt;b>x#lt;/b>"'], ['#42; x', '"#35;42; x"'], ['two\nlines', '"two<br/>lines"']]) {
