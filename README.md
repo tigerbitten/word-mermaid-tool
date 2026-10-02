@@ -56,6 +56,10 @@ Prototype. Word desktop on Windows and Mac.
   scrolls with it. Esc mid-drag cancels.
 - With several blocks selected, **Align…** in the toolbar lines them up,
   spaces them evenly, or makes them all the size of the first one selected.
+- Groups nest: select groups (and blocks) and group them again, and the
+  groups go in whole. Ungrouping an inner group leaves its blocks in the one
+  around it. Pasted Mermaid with nested `subgraph`s, or a connector to a whole
+  subgraph (`User --> Cloud`), comes in the same way.
 - Groups work like Miro frames: drag a group by its body, drag a block out to
   remove it, drop a block in to add it (the group lights up green as you do).
   Selecting a block outlines its group and tints the other members; the
@@ -68,6 +72,11 @@ Prototype. Word desktop on Windows and Mac.
 - **Insert into document** drops the picture in. **Open selected** picks a
   diagram back up out of the document. **Update in document** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
+  A picture you resized in Word keeps that scale when updated.
+- Pictures are PNGs at 400 ppi. Tick **Vector (SVG)** to insert them as SVG
+  instead, sharp at any zoom and in print (Word 2016 and later; older Word
+  shows the PNG kept inside). If Word refuses it, the picture goes in as a PNG
+  and the status line says so.
 
 ### Keyboard
 

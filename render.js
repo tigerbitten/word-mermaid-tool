@@ -496,8 +496,8 @@ function selfLoopPoints(n) {
 // are the resolved ports, and `a0`/`b0` the stub ends a stored path hangs off.
 function edgeRoutes(d) {
   const slots = d.edges.map((e) => {
-    const a = nodeById(d, e.from);
-    const b = nodeById(d, e.to);
+    const a = endOf(d, e.from);
+    const b = endOf(d, e.to);
     if (!a || !b) return null;
     if (a === b) return { a, self: true };
     // A straight connector runs between the exact points its ends were
@@ -727,7 +727,8 @@ function drawDiagram(parent, d) {
   const edgeLayer = el('g', { 'data-layer': 'edges' }, parent);
   const nodeLayer = el('g', { 'data-layer': 'nodes' }, parent);
 
-  for (const g of d.groups) if (g.w > 0) drawGroup(groupLayer, g);
+  // Outer groups first, so a subgroup is drawn on top of the group it sits in.
+  for (const g of d.groups.slice().sort((p, q) => groupDepth(d, p) - groupDepth(d, q))) if (g.w > 0) drawGroup(groupLayer, g);
   edgeGeometry(d).forEach((pts, i) => { if (pts) drawEdge(edgeLayer, d.edges[i], pts, i); });
   for (const n of d.nodes) drawNode(nodeLayer, n);
 }
@@ -858,9 +859,46 @@ function toBase64(bytes) {
   return btoa(s);
 }
 
+// The size a diagram is placed at in Word, in points: default-size text lands
+// at 11pt, and nothing is wider than the text column.
+function pictureSize(d) {
+  const b = diagramBounds(d);
+  let w = Math.ceil(b.w + EXPORT_PAD * 2) * PX_TO_PT;
+  let h = Math.ceil(b.h + EXPORT_PAD * 2) * PX_TO_PT;
+  if (w > MAX_DOC_WIDTH_PT) { h *= MAX_DOC_WIDTH_PT / w; w = MAX_DOC_WIDTH_PT; }
+  return { w, h };
+}
+
+// The SVG Word gets for a vector picture. Word draws SVG with its own
+// renderer, which can't be relied on to apply a <style> sheet or
+// `dominant-baseline`, so every style is written onto its element as an
+// attribute and text is moved down onto its baseline by hand.
+function svgForWord(d) {
+  const { svg } = buildExportSvg(d);
+  const rules = [...SVG_STYLE.matchAll(/\.([\w-]+)\s*\{([^}]*)\}/g)].map(([, cls, body]) =>
+    [cls, body.split(';').map((decl) => decl.split(':').map((t) => t.trim())).filter(([k, v]) => k && v)]);
+  for (const node of svg.querySelectorAll('[class]')) {
+    const classes = node.getAttribute('class').split(/\s+/);
+    for (const [cls, decls] of rules) if (classes.includes(cls)) for (const [k, v] of decls) node.setAttribute(k, v);
+    node.removeAttribute('class');
+  }
+  // Set on the element itself (a block's fill, a bigger label), so it wins over the class.
+  for (const node of svg.querySelectorAll('[style]')) {
+    for (let i = 0; i < node.style.length; i++) node.setAttribute(node.style[i], node.style.getPropertyValue(node.style[i]));
+    node.removeAttribute('style');
+  }
+  for (const text of svg.querySelectorAll('text[dominant-baseline]')) {
+    text.setAttribute('y', +text.getAttribute('y') + parseFloat(text.getAttribute('font-size')) * 0.35);
+    text.removeAttribute('dominant-baseline');
+  }
+  svg.querySelector('style').remove();
+  return new XMLSerializer().serializeToString(svg);
+}
+
 // SVG -> data: URL -> <img> -> canvas -> PNG. Never a blob: URL, which taints
-// the canvas in some hosts.
-async function renderPng(d) {
+// the canvas in some hosts. `widthPt` is the width the picture will have in
+// Word; without it, its natural size (pictureSize).
+async function renderPng(d, widthPt) {
   const { svg, width, height } = buildExportSvg(d);
   const text = new XMLSerializer().serializeToString(svg);
   // btoa throws on non-Latin1, and labels are arbitrary UTF-8.
@@ -873,12 +911,9 @@ async function renderPng(d) {
     img.src = dataUrl;
   });
 
-  // Wide diagrams are scaled down to the text column rather than overflowing
-  // it; the declared DPI follows the pixels, so the picture still lands at the
-  // size we asked for.
-  let w = width * PX_TO_PT;
-  let h = height * PX_TO_PT;
-  if (w > MAX_DOC_WIDTH_PT) { h *= MAX_DOC_WIDTH_PT / w; w = MAX_DOC_WIDTH_PT; }
+  // The declared DPI follows the pixels, so the picture lands at the size asked for.
+  const w = widthPt || pictureSize(d).w;
+  const h = w * height / width;
 
   const scale = Math.min(TARGET_PPI * (w / 72) / width, CANVAS_MAX_SIDE / Math.max(width, height),
     Math.sqrt(CANVAS_MAX_PIXELS / (width * height)));

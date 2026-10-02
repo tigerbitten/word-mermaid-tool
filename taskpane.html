@@ -130,13 +130,14 @@
 
   #actions { border-top: 1px solid #e0e0e0; padding: 0.6rem; flex: none;
     display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.3rem; }
+  #svgOpt { display: flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; color: #555; }
 </style>
 </head>
 <body>
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v19</span>
+    <span class="build">build v20</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -177,11 +178,12 @@
     <button id="insertBtn" class="primary">Insert into document</button>
     <button id="replaceBtn" title="Replaces the diagram you opened, or the picture selected in the document">Update in document</button>
     <button id="loadBtn" title="Click a diagram in the document first">Open selected</button>
+    <label id="svgOpt" title="Insert and Update put the diagram in as a vector picture: sharp at any zoom and in print. Word versions without SVG show the built-in PNG copy."><input type="checkbox" id="svgBox"> Vector (SVG)</label>
   </div>
 
-<script src="diagram.js?v=19"></script>
-<script src="render.js?v=19"></script>
-<script src="editor.js?v=19"></script>
+<script src="diagram.js?v=20"></script>
+<script src="render.js?v=20"></script>
+<script src="editor.js?v=20"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -804,7 +806,7 @@
   async function findTarget(context) {
     const range = context.document.getSelection();
     const selected = range.inlinePictures;
-    selected.load('items/altTextDescription,items/altTextTitle');
+    selected.load('items/altTextDescription,items/altTextTitle,items/width');
     range.load('text');
     await context.sync();
     const ours = selected.items.find((p) => looksLikeOurAltText(p.altTextDescription || ''));
@@ -817,7 +819,7 @@
     }
     if (!docTag) return null;
     const all = context.document.body.inlinePictures;
-    all.load('items/altTextTitle');
+    all.load('items/altTextTitle,items/altTextDescription,items/width');
     await context.sync();
     const pic = all.items.find((p) => p.altTextTitle === docTag);
     return pic ? { pic, viaRange: false, tag: docTag } : null;
@@ -831,37 +833,58 @@
       const d = getModel();
       if (!d.nodes.length) { setStatus('nothing to insert -- add a block first', 'error'); return; }
 
-      let png;
-      try { png = await renderPng(d); }
-      catch (e) { setStatus('rasterize failed: ' + describeError(e), 'error'); return; }
-
       try {
         let outcome = null;
+        let vectorRefused = null;
         await Word.run(async (context) => {
-          let pic;
+          let target = null;
           let tag;
+          let widthPt = null;
           if (mode === 'replace') {
-            const target = await findTarget(context);
+            target = await findTarget(context);
             if (!target) { outcome = 'none'; return; }
-            pic = target.viaRange
-              ? context.document.getSelection().insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace)
-              : target.pic.insertInlinePictureFromBase64(png.base64, Word.InsertLocation.replace);
             // The picture keeps its own tag, so updating a different diagram
             // than the one opened can't leave two pictures sharing one.
             tag = target.tag && target.tag.startsWith(TAG_PREFIX) ? target.tag : newTag();
+            // Resized in Word: the new picture keeps that scale (half size stays
+            // half size). Left as inserted, it takes the new diagram's own size.
+            const was = pictureSize(parseMermaid(target.pic.altTextDescription));
+            if (Math.abs(target.pic.width - was.w) > 2) widthPt = pictureSize(d).w * target.pic.width / was.w;
             outcome = 'updated';
           } else {
-            // A diagram gets its own centred paragraph rather than landing
-            // inline wherever the cursor happened to be sitting. Inserting into
-            // an arbitrary text range is what made placement unpredictable.
-            const range = context.document.getSelection();
-            const paragraph = range.paragraphs.getFirst().insertParagraph('', Word.InsertLocation.after);
-            paragraph.alignment = Word.Alignment.centered;
-            pic = paragraph.insertInlinePictureFromBase64(png.base64, Word.InsertLocation.end);
             tag = newTag();
             outcome = 'inserted';
           }
+          const png = await renderPng(d, widthPt);
+          console.log('picture', png.widthPt.toFixed(0) + 'x' + png.heightPt.toFixed(0) + 'pt', widthPt ? '(kept its scale)' : '');
 
+          // A diagram gets its own centred paragraph rather than landing
+          // inline wherever the cursor happened to be sitting. Inserting into
+          // an arbitrary text range is what made placement unpredictable.
+          const where = () => {
+            if (target) return target.viaRange ? context.document.getSelection() : target.pic;
+            const paragraph = context.document.getSelection().paragraphs.getFirst().insertParagraph('', Word.InsertLocation.after);
+            paragraph.alignment = Word.Alignment.centered;
+            return paragraph;
+          };
+          const at = target ? Word.InsertLocation.replace : Word.InsertLocation.end;
+
+          if (document.getElementById('svgBox').checked) {
+            try {
+              const range = where();
+              (range.getRange ? range.getRange() : range).insertOoxml(pictureOoxml(png, svgForWord(d), toAltText(d), tag), at);
+              await context.sync();
+              docTag = tag;
+              return;
+            } catch (e) {
+              // Said, not swallowed: the picture still goes in, as a PNG.
+              vectorRefused = describeError(e);
+              console.warn('vector picture refused:', e);
+              if (target) target = await findTarget(context);
+              if (mode === 'replace' && !target) { outcome = 'none'; return; }
+            }
+          }
+          const pic = where().insertInlinePictureFromBase64(png.base64, at);
           pic.altTextDescription = toAltText(d);
           pic.altTextTitle = tag;
           // The PNG already declares its DPI, so Word lays it out at this size
@@ -874,6 +897,8 @@
         });
         if (outcome === 'none') {
           setStatus('nothing to update -- click a diagram from this tool in the document, or use Insert', 'error');
+        } else if (vectorRefused) {
+          setStatus('Word refused the vector picture (' + vectorRefused + '), so it went in as a PNG', 'error');
         } else {
           setStatus(outcome === 'updated' ? 'updated in the document' : 'inserted -- keep editing and press Update to refresh it', 'success');
         }
@@ -881,6 +906,39 @@
         setStatus('insert failed: ' + describeError(e), 'error');
       }
     });
+  }
+
+  // A picture as Word stores an SVG one: the PNG as the picture, the SVG as
+  // its vector version (Word 2016 and later draw that; older ones the PNG),
+  // with the alt text and tag in the same XML -- an inserted SVG has no
+  // Office.js picture object to set them on.
+  function pictureOoxml(png, svgText, alt, tag) {
+    const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\n/g, '&#10;');
+    const cx = Math.round(png.widthPt * 12700);   // EMUs
+    const cy = Math.round(png.heightPt * 12700);
+    const svg64 = btoa(unescape(encodeURIComponent(svgText)));
+    const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    return `<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">
+<pkg:part pkg:name="/_rels/.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml"><pkg:xmlData>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${R}/officeDocument" Target="word/document.xml"/></Relationships>
+</pkg:xmlData></pkg:part>
+<pkg:part pkg:name="/word/_rels/document.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml"><pkg:xmlData>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdPng" Type="${R}/image" Target="media/diagram.png"/><Relationship Id="rIdSvg" Type="${R}/image" Target="media/diagram.svg"/></Relationships>
+</pkg:xmlData></pkg:part>
+<pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"><pkg:xmlData>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="${R}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main"><w:body><w:p><w:r><w:drawing>
+<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="Diagram" descr="${esc(alt)}" title="${esc(tag)}"/>
+<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic>
+<pic:nvPicPr><pic:cNvPr id="0" name="diagram.png"/><pic:cNvPicPr/></pic:nvPicPr>
+<pic:blipFill><a:blip r:embed="rIdPng"><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip r:embed="rIdSvg"/></a:ext></a:extLst></a:blip><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+</pic:pic></a:graphicData></a:graphic></wp:inline>
+</w:drawing></w:r></w:p></w:body></w:document>
+</pkg:xmlData></pkg:part>
+<pkg:part pkg:name="/word/media/diagram.png" pkg:contentType="image/png" pkg:compression="store"><pkg:binaryData>${png.base64}</pkg:binaryData></pkg:part>
+<pkg:part pkg:name="/word/media/diagram.svg" pkg:contentType="image/svg+xml" pkg:compression="store"><pkg:binaryData>${svg64}</pkg:binaryData></pkg:part>
+</pkg:package>`;
   }
 
   async function loadSelected() {
@@ -988,6 +1046,10 @@
     setStatus('selected above -- press Ctrl+C to copy', 'success');
   });
 
+  // Remembered in this browser; off until Word's drawing of the SVG has proved itself.
+  const svgBox = document.getElementById('svgBox');
+  try { svgBox.checked = localStorage.getItem('vectorPictures') === 'yes'; } catch (e) { /* storage blocked: stays off */ }
+  svgBox.addEventListener('change', () => { try { localStorage.setItem('vectorPictures', svgBox.checked ? 'yes' : 'no'); } catch (e) { /* not remembered */ } });
   document.getElementById('insertBtn').addEventListener('click', () => insertOrReplace('insert'));
   document.getElementById('replaceBtn').addEventListener('click', () => insertOrReplace('replace'));
   document.getElementById('loadBtn').addEventListener('click', loadSelected);

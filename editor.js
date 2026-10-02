@@ -415,7 +415,9 @@ function groupBoxes() {
 function regroup(all, boxes) {
   const nodes = all.filter((n) => !isPoint(n));      // a loose line end belongs to no group
   const ids = new Set(nodes.map((n) => n.id));
-  const whole = new Set(model.groups.filter((g) => g.members.every((m) => ids.has(m))));
+  const whole = new Set(model.groups.filter((g) => groupNodeIds(model, g).every((m) => ids.has(m))));
+  // Innermost first: a block dropped into a subgroup joins it, not the group around it.
+  boxes = boxes.slice().sort((p, q) => p.w * p.h - q.w * q.h);
   for (const n of nodes) {
     const home = groupOf(n.id);
     if (home && whole.has(home)) continue;
@@ -504,8 +506,10 @@ function pushUndo() {
 }
 
 function refitGroups() {
-  model.groups = model.groups.filter((g) => g.members.length);
-  for (const g of model.groups) fitGroup(model, g);
+  model.groups = model.groups.filter((g) => groupNodeIds(model, g).length);
+  fitGroups(model);
+  // A connector to a group that was deleted or ungrouped has nothing left to attach to.
+  model.edges = model.edges.filter((e) => endOf(model, e.from) && endOf(model, e.to));
 }
 
 // A loose line end with no line left using it (the line was deleted, or its
@@ -658,17 +662,24 @@ function selectedNodes() {
   for (const id of sel) {
     if (nodeById(model, id)) ids.add(id);
     const g = model.groups.find((gr) => gr.id === id);
-    if (g) g.members.forEach((m) => ids.add(m));
+    if (g) groupNodeIds(model, g).forEach((m) => ids.add(m));
   }
   return [...ids].map((id) => nodeById(model, id)).filter(Boolean);
 }
 
 function groupSelection() {
-  const ids = selectedNodes().map((n) => n.id);
-  if (!ids.length) return 'select blocks first -- shift-click them, or shift-drag a box around them';
+  // Selected groups go into the new one whole, as subgroups; selected blocks
+  // that aren't in one of them become its own members.
+  const picked = model.groups.filter((g) => sel.has(g.id) && !sel.has(g.parent));
+  const inPicked = new Set(picked.flatMap((g) => groupNodeIds(model, g)));
+  const ids = [...sel].filter((id) => nodeById(model, id) && !inPicked.has(id));
+  if (!ids.length && !picked.length) return 'select blocks first -- shift-click them, or shift-drag a box around them';
   pushUndo();
   for (const g of model.groups) g.members = g.members.filter((m) => !ids.includes(m));
-  const g = { id: makeId('Group', takenIds()), label: 'Group', members: ids, x: 0, y: 0, w: 0, h: 0 };
+  const parents = new Set(picked.map((g) => g.parent || null));
+  const g = { id: makeId('Group', takenIds()), label: 'Group', members: ids,
+              parent: parents.size === 1 ? [...parents][0] : null, x: 0, y: 0, w: 0, h: 0 };
+  for (const c of picked) c.parent = g.id;
   model.groups.push(g);
   // Select the new boundary and open its name for editing: otherwise grouping
   // looks like it did nothing, because the blocks stay selected underneath.
@@ -685,6 +696,12 @@ function ungroupSelection() {
   const hit = model.groups.filter((g) => sel.has(g.id) || g.members.some((m) => sel.has(m)));
   if (!hit.length) return 'select a group boundary, or a block inside one';
   pushUndo();
+  // A subgroup's blocks and subgroups stay in the group around it.
+  for (const g of hit) {
+    const up = hit.includes(groupById(model, g.parent)) ? null : groupById(model, g.parent);
+    if (up) up.members.push(...g.members);
+    for (const c of childGroups(model, g)) c.parent = g.parent;
+  }
   model.groups = model.groups.filter((g) => !hit.includes(g));
   commit();
   return null;
@@ -710,6 +727,8 @@ function removeSelectionFromGroup() {
   pushUndo();
   const homes = nodes.map((n) => groupOf(n.id));
   nodes.forEach((n, i) => { homes[i].members = homes[i].members.filter((m) => m !== n.id); });
+  // Out of a subgroup is into the group around it.
+  nodes.forEach((n, i) => { const up = groupById(model, homes[i].parent); if (up) up.members.push(n.id); });
   refitGroups();
   nodes.forEach((n, i) => {
     const g = homes[i];
@@ -852,13 +871,15 @@ function copySelection() {
   const nodes = selectedNodes();
   if (!nodes.length) return false;
   const ids = new Set(nodes.map((n) => n.id));
+  const groups = model.groups.filter((g) => groupNodeIds(model, g).length && groupNodeIds(model, g).every((m) => ids.has(m)));
+  const ends = new Set([...ids, ...groups.map((g) => g.id)]);
   // Groups come along when every one of their blocks does. Without that, a
   // duplicated group pasted 20px over from the original dropped all of its
   // copies into the original group instead of making a second one.
   clipboard = JSON.parse(JSON.stringify({
     nodes,
-    edges: model.edges.filter((e) => ids.has(e.from) && ids.has(e.to)),
-    groups: model.groups.filter((g) => g.members.length && g.members.every((m) => ids.has(m))),
+    edges: model.edges.filter((e) => ends.has(e.from) && ends.has(e.to)),
+    groups,
   }));
   clipboard.pastes = 0;
   return true;
@@ -907,6 +928,18 @@ function pasteClipboard(dx, dy) {
     model.nodes.push(n);
     made.push(n.id);
   }
+  const madeGroups = [];
+  for (const g of clipboard.groups || []) {
+    const copy = { id: makeId(g.label, taken), label: g.label, members: g.members.map((m) => remap[m]),
+                   parent: g.parent, fontSize: g.fontSize, x: 0, y: 0, w: 0, h: 0 };
+    taken.add(copy.id);
+    remap[g.id] = copy.id;
+    model.groups.push(copy);
+    madeGroups.push(copy.id);
+  }
+  // A copied subgroup stays inside its copied parent; one copied without its
+  // parent comes out on its own.
+  for (const id of madeGroups) { const g = groupById(model, id); g.parent = remap[g.parent] || null; }
   for (const e of clipboard.edges) {
     const copy = JSON.parse(JSON.stringify(e));
     copy.from = remap[e.from];
@@ -917,20 +950,12 @@ function pasteClipboard(dx, dy) {
     if (copy.points) copy.points = copy.points.map((q) => ({ x: q.x + snap(dx), y: q.y + snap(dy) }));
     model.edges.push(copy);
   }
-  const madeGroups = [];
-  for (const g of clipboard.groups || []) {
-    const copy = { id: makeId(g.label, taken), label: g.label, members: g.members.map((m) => remap[m]),
-                   fontSize: g.fontSize, x: 0, y: 0, w: 0, h: 0 };
-    taken.add(copy.id);
-    model.groups.push(copy);
-    madeGroups.push(copy.id);
-  }
   // Pasted next to blocks in a group, loose copies join that group. Copies in
   // a pasted group of their own stay in it: regroup leaves whole groups alone.
   regroup(made.map((id) => nodeById(model, id)), boxes);
   const blocks = made.filter((id) => !isPoint(nodeById(model, id)));
   sel = new Set(blocks.filter((id) => !madeGroups.some((gid) =>
-    model.groups.find((g) => g.id === gid).members.includes(id))).concat(madeGroups));
+    model.groups.find((g) => g.id === gid).members.includes(id))).concat(madeGroups.filter((id) => !madeGroups.includes(groupById(model, id).parent))));
   // A pasted line on its own is selected as a line.
   selEdge = !blocks.length && clipboard.edges.length ? model.edges.length - 1 : -1;
   commit();
@@ -1238,7 +1263,7 @@ function commitOpenEditor() {
 // Where the far end of a line is, for angle snapping: a loose end's own spot,
 // an attached end's exact spot, or the middle of a block it floats on.
 function otherEndPoint(e, end) {
-  const other = nodeById(model, end === 'from' ? e.to : e.from);
+  const other = endOf(model, end === 'from' ? e.to : e.from);
   const an = end === 'from' ? e.toAnchor : e.fromAnchor;
   if (isPoint(other)) return { x: other.x, y: other.y };
   return an && an.t != null ? anchorPoint(other, an.side, an.t) : centerOf(other);
@@ -1449,7 +1474,7 @@ function onPointerMove(ev) {
     regroup(drag.nodes, drag.groupBoxes);
     // Not refitGroups: that drops groups that have emptied, and a group
     // emptied halfway through a drag has to be able to come back.
-    for (const g of model.groups) fitGroup(model, g);
+    fitGroups(model);
     render();
     return;
   }

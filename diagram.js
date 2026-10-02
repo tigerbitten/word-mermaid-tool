@@ -5,7 +5,10 @@
 //     nodes: [{id,label,shape,x,y,w,h,fill,fontSize,bold}],
 //     edges: [{from,to,label,dash,head,width,color,fontSize,bold,route,
 //              fromAnchor,toAnchor,points}],
-//     groups: [{id,label,members:[nodeId],x,y,w,h}] }
+//     groups: [{id,label,members:[nodeId],parent,x,y,w,h}] }
+//
+// A group's members are its own blocks; a group inside another names it as
+// `parent`. A connector's end is a block's id or a group's (`B --> G`).
 //
 // Nodes carry their own geometry because the canvas is the source of truth --
 // Mermaid's layout engine is never run. Positions round-trip as `%%` comment
@@ -109,6 +112,30 @@ function defaultSize(shape) {
 
 function nodeById(d, id) {
   return d.nodes.find((n) => n.id === id) || null;
+}
+
+function groupById(d, id) {
+  return d.groups.find((g) => g.id === id) || null;
+}
+
+// What a connector's end is attached to: a block, or a whole group.
+function endOf(d, id) {
+  return nodeById(d, id) || groupById(d, id);
+}
+
+function childGroups(d, g) {
+  return d.groups.filter((c) => c.parent === g.id);
+}
+
+// Every block in a group, its subgroups' included.
+function groupNodeIds(d, g) {
+  return g.members.concat(...childGroups(d, g).map((c) => groupNodeIds(d, c)));
+}
+
+function groupDepth(d, g) {
+  let k = 0;
+  for (let p = groupById(d, g.parent); p; p = groupById(d, p.parent)) k++;
+  return k;
 }
 
 // Words Mermaid's grammar claims. A node called `end` in particular ends the
@@ -232,8 +259,8 @@ function flowDirection(d) {
   let sx = 0;
   let sy = 0;
   for (const e of d.edges) {
-    const a = nodeById(d, e.from);
-    const b = nodeById(d, e.to);
+    const a = endOf(d, e.from);
+    const b = endOf(d, e.to);
     if (!a || !b || a === b) continue;
     const dx = cx(b) - cx(a);
     const dy = cy(b) - cy(a);
@@ -274,18 +301,21 @@ function toMermaid(d) {
   // ambiguity about which group a node belongs to. Loose line ends go last:
   // they are the least interesting thing in the diagram.
   const grouped = new Set(d.groups.flatMap((g) => g.members));
-  const top = d.groups.filter((g) => g.members.some((id) => nodeById(d, id)))
+  const hasBlocks = (g) => groupNodeIds(d, g).some((id) => nodeById(d, id));
+  const top = d.groups.filter((g) => !g.parent && hasBlocks(g))
     .concat(d.nodes.filter((n) => !grouped.has(n.id) && !isPoint(n)));
-  const order = [];                      // every node, in the order declared
-  for (const it of readingOrder(top)) {
-    if (!it.members) { lines.push('  ' + nodeDecl(it)); order.push(it); continue; }
-    lines.push('  subgraph ' + it.id + '[' + quoteLabel(it.label) + ']');
-    for (const n of readingOrder(it.members.map((id) => nodeById(d, id)).filter(Boolean))) {
-      lines.push('    ' + nodeDecl(n));
-      order.push(n);
+  const order = [];                      // every node and group, in the order declared
+  const declare = (items, pad) => {
+    for (const it of readingOrder(items)) {
+      order.push(it);
+      if (!it.members) { lines.push(pad + nodeDecl(it)); continue; }
+      lines.push(pad + 'subgraph ' + it.id + '[' + quoteLabel(it.label) + ']');
+      declare(it.members.map((id) => nodeById(d, id)).filter(Boolean)
+        .concat(childGroups(d, it).filter(hasBlocks)), pad + '  ');
+      lines.push(pad + 'end');
     }
-    lines.push('  end');
-  }
+  };
+  declare(top, '  ');
   for (const n of d.nodes) if (isPoint(n) && !grouped.has(n.id)) { lines.push('  ' + nodeDecl(n)); order.push(n); }
 
   // Connectors grouped by the block they leave, in that same order, so the
@@ -296,7 +326,7 @@ function toMermaid(d) {
   const edges = d.edges.slice().sort((p, q) => rank.get(p.from) - rank.get(q.from) || rank.get(p.to) - rank.get(q.to));
   for (const e of edges) lines.push('  ' + edgeDecl(e));
   for (const n of order) {
-    const s = styleDecl(n);
+    const s = !n.members && styleDecl(n);
     if (s) lines.push('  ' + s);
   }
   // A group's title size, as a standard `style` on the subgraph.
@@ -600,7 +630,8 @@ function parseMermaid(text) {
       const sub = line.match(/^subgraph\s+([A-Za-z0-9_-]+)\s*(?:\[(.*)\])?\s*$/);
       const label = sub ? (sub[2] ? unquoteLabel(sub[2]) : sub[1]) : unquoteLabel(line.slice(9).trim());
       const id = sub ? sub[1] : makeId(label, new Set(d.groups.map((g) => g.id)));
-      const g = { id, label, members: [], x: 0, y: 0, w: 0, h: 0 };
+      const g = { id, label, members: [], parent: groupStack.length ? groupStack[groupStack.length - 1].id : null,
+                  x: 0, y: 0, w: 0, h: 0 };
       d.groups.push(g);
       groupStack.push(g);
       continue;
@@ -689,6 +720,11 @@ function parseMermaid(text) {
     if (size) g.fontSize = +size[1];
   }
 
+  // `B --> G` with G a subgraph connects to the whole group, as in Mermaid:
+  // the reference made a block named G, which goes again.
+  const groupIds = new Set(d.groups.map((g) => g.id));
+  d.nodes = d.nodes.filter((n) => !groupIds.has(n.id));
+
   // Groups own their members, so a node listed in two is a contradiction;
   // first one wins.
   const claimed = new Set();
@@ -715,6 +751,16 @@ function applyLayout(d, layout) {
   for (const n of d.nodes) {
     const l = layout[n.id];
     if (l) Object.assign(n, l); else unplaced.push(n);
+  }
+
+  // Pasted-in Mermaid with groups and no positions: each group is laid out as
+  // a unit, so groups -- nested ones too -- never overlap.
+  if (unplaced.length === d.nodes.length && d.groups.length) {
+    const roots = d.groups.filter((g) => !g.parent);
+    const grouped = new Set(d.groups.flatMap((g) => g.members));
+    layoutBlock(d, roots.concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40);
+    fitGroups(d);
+    return;
   }
 
   if (unplaced.length) {
@@ -753,7 +799,68 @@ function applyLayout(d, layout) {
     }
   }
 
-  for (const g of d.groups) fitGroup(d, g);
+  fitGroups(d);
+}
+
+// Lays `items` (blocks and groups) out in layers along the diagram's
+// direction, the way the connectors between them run, with its top-left at
+// x0,y0; a group's own contents are laid out first, inside it. Returns the
+// size taken.
+function layoutBlock(d, items, x0, y0) {
+  const across = d.direction === 'LR' || d.direction === 'RL';
+  const sizes = new Map();
+  for (const it of items) {
+    if (!it.members) { sizes.set(it, { w: it.w, h: it.h }); continue; }
+    const inner = layoutBlock(d, it.members.map((id) => nodeById(d, id)).filter(Boolean).concat(childGroups(d, it)),
+      0, 0);
+    sizes.set(it, { w: inner.w + GROUP_PAD * 2, h: inner.h + GROUP_PAD * 2 + groupTitleH(it) });
+  }
+  // Which item each block or group id sits in, so a connector between two
+  // things inside different items orders those items.
+  const home = new Map();
+  for (const it of items) {
+    home.set(it.id, it);
+    if (it.members) {
+      for (const id of groupNodeIds(d, it)) home.set(id, it);
+      for (const g of d.groups) for (let p = g; p; p = groupById(d, p.parent)) if (p === it) home.set(g.id, it);
+    }
+  }
+  const depth = new Map(items.map((it) => [it, 0]));
+  for (let pass = 0; pass < items.length; pass++) {
+    let changed = false;
+    for (const e of d.edges) {
+      const a = home.get(e.from);
+      const b = home.get(e.to);
+      if (!a || !b || a === b) continue;
+      if (depth.get(a) + 1 > depth.get(b)) { depth.set(b, depth.get(a) + 1); changed = true; }
+    }
+    if (!changed) break;
+  }
+  const layers = [];
+  for (const it of items) (layers[depth.get(it)] = layers[depth.get(it)] || []).push(it);
+  const reversed = d.direction === 'RL' || d.direction === 'BT';
+  if (reversed) layers.reverse();
+  let along = 0;
+  let widest = 0;
+  for (const layer of layers.filter(Boolean)) {
+    let side = 0;
+    let thick = 0;
+    for (const it of layer) {
+      const sz = sizes.get(it);
+      const [x, y] = across ? [x0 + along, y0 + side] : [x0 + side, y0 + along];
+      if (it.members) {
+        const dx = x + GROUP_PAD;
+        const dy = y + GROUP_PAD + groupTitleH(it);
+        for (const id of groupNodeIds(d, it)) { const n = nodeById(d, id); if (n) { n.x += dx; n.y += dy; } }
+      } else { it.x = x; it.y = y; }
+      side += (across ? sz.h : sz.w) + (across ? 50 : 80);
+      thick = Math.max(thick, across ? sz.w : sz.h);
+    }
+    widest = Math.max(widest, side - (across ? 50 : 80));
+    along += thick + (across ? 80 : 50);
+  }
+  along -= across ? 80 : 50;
+  return across ? { w: Math.max(0, along), h: widest } : { w: widest, h: Math.max(0, along) };
 }
 
 // A group's box is derived from its members plus padding, never stored
@@ -767,8 +874,16 @@ function groupTitleH(g) {
   return Math.max(GROUP_TITLE_H, Math.round((g.fontSize || GROUP_FONT_SIZE) * 1.8));
 }
 
+// Innermost first, since a group's box takes in its subgroups' boxes. A
+// parent that no longer exists (deleted, ungrouped) leaves its subgroup on top.
+function fitGroups(d) {
+  for (const g of d.groups) if (g.parent && !groupById(d, g.parent)) g.parent = null;
+  for (const g of d.groups.slice().sort((p, q) => groupDepth(d, q) - groupDepth(d, p))) fitGroup(d, g);
+}
+
 function fitGroup(d, g) {
-  const members = g.members.map((id) => nodeById(d, id)).filter(Boolean);
+  const members = g.members.map((id) => nodeById(d, id)).filter(Boolean)
+    .concat(childGroups(d, g).filter((c) => c.w > 0));
   if (!members.length) { g.w = 0; g.h = 0; return; }
   const x0 = Math.min(...members.map((n) => n.x));
   const y0 = Math.min(...members.map((n) => n.y));
