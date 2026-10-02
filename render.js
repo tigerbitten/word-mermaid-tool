@@ -386,6 +386,28 @@ function crossesBox(u, v, r) {
          Math.max(u.y, v.y) > r.y + 1 && Math.min(u.y, v.y) < r.y + r.h - 1;
 }
 
+// Running through another block is allowed -- something has to be drawn when
+// there's no way round -- but costs as much as a long detour, so any clear
+// route wins.
+const THROUGH_BLOCK = 2000;
+// Running along a connector already drawn, closer than this, reads as one
+// line: it costs as if that stretch were three times as long.
+const SHARED_LANE = 6;
+
+// How much of an axis-aligned segment runs on top of (within SHARED_LANE of)
+// one of `lanes`, the segments of connectors routed before it.
+function sharedLength(u, v, lanes) {
+  let total = 0;
+  const horiz = Math.abs(u.y - v.y) < 0.5;
+  for (const [p, q] of lanes) {
+    if (horiz !== (Math.abs(p.y - q.y) < 0.5)) continue;
+    const [a, b, c, e] = horiz ? [u.x, v.x, p.x, q.x] : [u.y, v.y, p.y, q.y];
+    if (Math.abs(horiz ? u.y - p.y : u.x - p.x) > SHARED_LANE) continue;
+    total += Math.max(0, Math.min(Math.max(a, b), Math.max(c, e)) - Math.max(Math.min(a, b), Math.min(c, e)));
+  }
+  return total;
+}
+
 // A right-angle route's cost, or null if it's unacceptable: a leg that isn't
 // horizontal or vertical, one that cuts through either block, or a route that
 // leaves its first block anywhere but straight out of the side it's attached
@@ -414,6 +436,17 @@ function routeCost(pts, s0, A, s1, B) {
   return len + (pts.length - 2) * 24;
 }
 
+// What else a route costs: every other block it runs through, and every
+// stretch it runs along a connector already drawn.
+function clutterCost(pts, obstacles, lanes) {
+  let cost = 0;
+  for (let i = 1; i < pts.length; i++) {
+    for (const r of obstacles) if (crossesBox(pts[i - 1], pts[i], r)) cost += THROUGH_BLOCK;
+    cost += sharedLength(pts[i - 1], pts[i], lanes) * 2;
+  }
+  return cost;
+}
+
 // The bends of an automatically routed right-angle connector, between its two
 // stub ends. Rather than one fixed shape, it tries every plausible one -- a
 // straight run, a single corner, a Z through the middle or round the outside
@@ -421,31 +454,64 @@ function routeCost(pts, s0, A, s1, B) {
 // routeCost). That is what stops a connector from cutting through its own
 // blocks or doubling back when the ends face away from each other. The
 // middle-channel Z is tried first, so on a tie it wins: it's the balanced one.
-function routeBends(p0, s0, a0, A, p1, s1, b0, B) {
+function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
   const M = STUB;
   const midX = (a0.x + b0.x) / 2;
   const midY = (a0.y + b0.y) / 2;
-  const xs = [Math.min(A.x, B.x) - M, Math.max(A.x + A.w, B.x + B.w) + M, a0.x, b0.x];
-  const ys = [Math.min(A.y, B.y) - M, Math.max(A.y + A.h, B.y + B.h) + M, a0.y, b0.y];
-  const cands = [
-    [{ x: midX, y: a0.y }, { x: midX, y: b0.y }],
-    [{ x: a0.x, y: midY }, { x: b0.x, y: midY }],
-    [],
-    [{ x: b0.x, y: a0.y }],
-    [{ x: a0.x, y: b0.y }],
-  ];
-  for (const x of xs) cands.push([{ x, y: a0.y }, { x, y: b0.y }]);
-  for (const y of ys) cands.push([{ x: a0.x, y }, { x: b0.x, y }]);
-  for (const x of xs.concat(midX)) {
-    for (const y of ys.concat(midY)) {
-      cands.push([{ x, y: a0.y }, { x, y }, { x: b0.x, y }]);
-      cands.push([{ x: a0.x, y }, { x, y }, { x, y: b0.y }]);
+  // Neighbouring lanes each side of the middle, for when another connector
+  // already runs there.
+  const xs = [Math.min(A.x, B.x) - M, Math.max(A.x + A.w, B.x + B.w) + M, a0.x, b0.x, midX - 12, midX + 12];
+  const ys = [Math.min(A.y, B.y) - M, Math.max(A.y + A.h, B.y + B.h) + M, a0.y, b0.y, midY - 12, midY + 12];
+  // Only what's near the two blocks can be in the way: the rest is left out,
+  // which is what keeps this fast enough to run on every pointer move.
+  const x0 = Math.min(A.x, B.x) - 120, x1 = Math.max(A.x + A.w, B.x + B.w) + 120;
+  const y0 = Math.min(A.y, B.y) - 120, y1 = Math.max(A.y + A.h, B.y + B.h) + 120;
+  const near = (r) => r.x <= x1 && r.x + r.w >= x0 && r.y <= y1 && r.y + r.h >= y0;
+  const obstacles = blocks.filter((n) => n !== A && n !== B && near(n));
+  const nearLanes = lanes.filter(([p, q]) => near({ x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), w: Math.abs(p.x - q.x), h: Math.abs(p.y - q.y) }));
+
+  const pick = () => {
+    const cands = [
+      [{ x: midX, y: a0.y }, { x: midX, y: b0.y }],
+      [{ x: a0.x, y: midY }, { x: b0.x, y: midY }],
+      [],
+      [{ x: b0.x, y: a0.y }],
+      [{ x: a0.x, y: b0.y }],
+    ];
+    for (const x of xs) cands.push([{ x, y: a0.y }, { x, y: b0.y }]);
+    for (const y of ys) cands.push([{ x: a0.x, y }, { x: b0.x, y }]);
+    for (const x of xs.concat(midX)) {
+      for (const y of ys.concat(midY)) {
+        cands.push([{ x, y: a0.y }, { x, y }, { x: b0.x, y }]);
+        cands.push([{ x: a0.x, y }, { x, y }, { x, y: b0.y }]);
+      }
     }
-  }
-  let best = null;
-  for (const c of cands) {
-    const cost = routeCost(simplify([p0, a0].concat(c, [b0, p1])), s0, A, s1, B);
-    if (cost != null && (!best || cost < best.cost)) best = { cost, c };
+    // Cheapest shape first; clutter only ever adds, so once a shape's own cost
+    // is past the best total found, nothing after it can win.
+    const scored = [];
+    for (const c of cands) {
+      const pts = simplify([p0, a0].concat(c, [b0, p1]));
+      const cost = routeCost(pts, s0, A, s1, B);
+      if (cost != null) scored.push({ cost, c, pts });
+    }
+    scored.sort((p, q) => p.cost - q.cost);
+    let best = null;
+    for (const r of scored) {
+      if (best && r.cost >= best.cost) break;
+      const cost = r.cost + clutterCost(r.pts, obstacles, nearLanes);
+      if (!best || cost < best.cost) best = { cost, c: r.c, clutter: cost - r.cost };
+    }
+    return best;
+  };
+  // A route through a block gets the gaps beside that block to try, and so on
+  // for whatever the detour runs into -- a few rounds, not every block at once.
+  let best = pick();
+  for (let round = 0; best && best.clutter >= THROUGH_BLOCK && round < 3; round++) {
+    const pts = simplify([p0, a0].concat(best.c, [b0, p1]));
+    const hit = obstacles.filter((r) => pts.some((u, i) => i && crossesBox(pts[i - 1], u, r)));
+    if (!hit.length) break;
+    for (const r of hit) { xs.push(r.x - M, r.x + r.w + M); ys.push(r.y - M, r.y + r.h + M); }
+    best = pick();
   }
   // Nothing acceptable (the blocks overlap, say): a single corner is the least
   // bad thing to draw.
@@ -495,6 +561,16 @@ function selfLoopPoints(n) {
 // runs -- the editor needs those to know which leg you grabbed. `from`/`to`
 // are the resolved ports, and `a0`/`b0` the stub ends a stored path hangs off.
 function edgeRoutes(d) {
+  // What a connector must go round: drawn blocks, not loose line ends. And the
+  // legs of the connectors routed so far, which the next one keeps off.
+  const blocks = d.nodes.filter((n) => !isPoint(n) && n.w && n.h);
+  const lanes = [];
+  // A group's dashed border is a line too: a connector running along it is lost in it.
+  for (const g of d.groups) {
+    if (!g.w) continue;
+    const c = [{ x: g.x, y: g.y }, { x: g.x + g.w, y: g.y }, { x: g.x + g.w, y: g.y + g.h }, { x: g.x, y: g.y + g.h }];
+    for (let k = 0; k < 4; k++) lanes.push([c[k], c[(k + 1) % 4]]);
+  }
   const slots = d.edges.map((e) => {
     const a = endOf(d, e.from);
     const b = endOf(d, e.to);
@@ -591,9 +667,11 @@ function edgeRoutes(d) {
     const a0 = stubOf(s.a, p0, s.from.side);
     const b0 = stubOf(s.b, p1, s.to.side);
     const bends = d.edges[i].points && d.edges[i].points.length
-      ? d.edges[i].points : routeBends(p0, s.from.side, a0, s.a, p1, s.to.side, b0, s.b);
+      ? d.edges[i].points : routeBends(p0, s.from.side, a0, s.a, p1, s.to.side, b0, s.b, blocks, lanes);
+    const raw = joinOrthogonal([p0, a0].concat(bends, [b0, p1]));
+    for (let k = 1; k < raw.length; k++) lanes.push([raw[k - 1], raw[k]]);
     return {
-      raw: joinOrthogonal([p0, a0].concat(bends, [b0, p1])),
+      raw,
       from: { side: s.from.side, t: s.from.t },
       to: { side: s.to.side, t: s.to.t },
       a0, b0,

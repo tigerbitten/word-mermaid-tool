@@ -743,124 +743,148 @@ function parseMermaid(text) {
   return d;
 }
 
-// Anything the `%%` lines didn't place gets an automatic spot. Deliberately
-// simple layering -- imports are the secondary workflow and the user nudges
-// afterwards, so this only has to be non-stupid, not good.
+// Anything the `%%` lines didn't place gets an automatic spot. Pasted-in
+// Mermaid (no `%%` lines at all) is laid out whole, group by group; a few
+// blocks added to a drawn diagram by editing the text go in rows below it.
 function applyLayout(d, layout) {
   const unplaced = [];
   for (const n of d.nodes) {
     const l = layout[n.id];
     if (l) Object.assign(n, l); else unplaced.push(n);
   }
-
-  // Pasted-in Mermaid with groups and no positions: each group is laid out as
-  // a unit, so groups -- nested ones too -- never overlap.
-  if (unplaced.length === d.nodes.length && d.groups.length) {
-    const roots = d.groups.filter((g) => !g.parent);
+  if (unplaced.length === d.nodes.length) {
     const grouped = new Set(d.groups.flatMap((g) => g.members));
-    layoutBlock(d, roots.concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40);
-    fitGroups(d);
-    return;
+    layoutBlock(d, d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id))), 40, 40);
+  } else if (unplaced.length) {
+    const placed = d.nodes.filter((n) => !unplaced.includes(n));
+    const bottom = Math.max(...placed.map((n) => n.y + n.h)) + 60;
+    const left = Math.min(...placed.map((n) => n.x));
+    const ids = new Map(unplaced.map((n, i) => [n.id, i]));
+    const pairs = d.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => [ids.get(e.from), ids.get(e.to)]);
+    layerItems(unplaced, pairs).forEach((layer, k) => layer.forEach((n, i) => {
+      n.x = left + i * (DEFAULT_W + 80);
+      n.y = bottom + k * (DEFAULT_H + 50);
+    }));
   }
-
-  if (unplaced.length) {
-    const depth = new Map(d.nodes.map((n) => [n.id, 0]));
-    // Longest-path layering. Bounded by node count so a cycle terminates
-    // instead of spinning.
-    for (let pass = 0; pass < d.nodes.length; pass++) {
-      let changed = false;
-      for (const e of d.edges) {
-        if (e.from === e.to) continue;
-        const want = depth.get(e.from) + 1;
-        if (depth.has(e.to) && want > depth.get(e.to)) { depth.set(e.to, want); changed = true; }
-      }
-      if (!changed) break;
-    }
-
-    const rows = new Map();
-    for (const n of unplaced) {
-      const layer = depth.get(n.id) || 0;
-      if (!rows.has(layer)) rows.set(layer, []);
-      rows.get(layer).push(n);
-    }
-    const acrossGap = DEFAULT_W + 80;
-    const downGap = DEFAULT_H + 50;
-    // RL and BT run the layers the other way, so the drawing flows the way the
-    // header says -- and saving it again gives back the same header.
-    const last = Math.max(...rows.keys());
-    const reversed = d.direction === 'RL' || d.direction === 'BT';
-    for (const [layer, group] of rows) {
-      group.forEach((n, idx) => {
-        const along = (reversed ? last - layer : layer) * (d.direction === 'LR' || d.direction === 'RL' ? acrossGap : downGap + 30);
-        const across = idx * (d.direction === 'LR' || d.direction === 'RL' ? downGap : acrossGap);
-        if (d.direction === 'LR' || d.direction === 'RL') { n.x = 40 + along; n.y = 40 + across; }
-        else { n.x = 40 + across; n.y = 40 + along; }
-      });
-    }
-  }
-
   fitGroups(d);
+}
+
+// `items` in layers along the flow, each after everything that points to it
+// -- except along a connector that closes a loop (found depth-first, in the
+// order the items were written, so the loop breaks at its feedback arrow:
+// whoever writes `PC --> IMEM ... ALU --> PC` starts at PC), which would
+// otherwise push a loop round forever and fling it thousands of pixels out. Within a layer, items sit near what
+// they connect to (barycentre sweeps), so connectors cross as little as
+// possible. `pairs` are [from, to] indexes into `items`.
+function layerItems(items, pairs) {
+  const n = items.length;
+  const links = pairs.filter(([a, b]) => a !== b);
+  const succ = items.map(() => []);
+  for (const [a, b] of links) succ[a].push(b);
+  const state = new Array(n).fill(0);
+  const forward = items.map(() => []);
+  const visit = (a) => {
+    state[a] = 1;
+    for (const b of succ[a]) {
+      if (state[b] === 1) continue;           // closes a loop: not used for layering
+      forward[a].push(b);
+      if (!state[b]) visit(b);
+    }
+    state[a] = 2;
+  };
+  for (let i = 0; i < n; i++) if (!state[i]) visit(i);
+
+  const depth = new Array(n).fill(0);
+  const indeg = new Array(n).fill(0);
+  forward.forEach((bs) => bs.forEach((b) => indeg[b]++));
+  const queue = [];
+  for (let i = 0; i < n; i++) if (!indeg[i]) queue.push(i);
+  while (queue.length) {
+    const a = queue.shift();
+    for (const b of forward[a]) {
+      depth[b] = Math.max(depth[b], depth[a] + 1);
+      if (!--indeg[b]) queue.push(b);
+    }
+  }
+  const layers = [];
+  for (let i = 0; i < n; i++) (layers[depth[i]] = layers[depth[i]] || []).push(i);
+  const dense = layers.filter(Boolean);
+
+  const near = items.map(() => []);
+  for (const [a, b] of links) { near[a].push(b); near[b].push(a); }
+  const pos = new Array(n);
+  dense.forEach((l) => l.forEach((i, k) => { pos[i] = k - (l.length - 1) / 2; }));
+  for (let sweep = 0; sweep < 4; sweep++) {
+    for (const l of sweep % 2 ? dense.slice().reverse() : dense) {
+      const centre = (i) => {
+        const ns = near[i].filter((j) => depth[j] !== depth[i]);
+        return ns.length ? ns.reduce((sum, j) => sum + pos[j], 0) / ns.length : pos[i];
+      };
+      const want = new Map(l.map((i) => [i, centre(i)]));
+      l.sort((x, y) => want.get(x) - want.get(y) || pos[x] - pos[y]);
+      l.forEach((i, k) => { pos[i] = k - (l.length - 1) / 2; });
+    }
+  }
+  return dense.map((l) => l.map((i) => items[i]));
 }
 
 // Lays `items` (blocks and groups) out in layers along the diagram's
 // direction, the way the connectors between them run, with its top-left at
-// x0,y0; a group's own contents are laid out first, inside it. Returns the
-// size taken.
+// x0,y0; a group's own contents are laid out first, inside it. Each layer is
+// centred across the flow. Returns the size taken.
 function layoutBlock(d, items, x0, y0) {
   const across = d.direction === 'LR' || d.direction === 'RL';
+  const GAP_ALONG = across ? 80 : 60;
+  const GAP_ACROSS = across ? 40 : 60;
   const sizes = new Map();
   for (const it of items) {
     if (!it.members) { sizes.set(it, { w: it.w, h: it.h }); continue; }
-    const inner = layoutBlock(d, it.members.map((id) => nodeById(d, id)).filter(Boolean).concat(childGroups(d, it)),
-      0, 0);
-    sizes.set(it, { w: inner.w + GROUP_PAD * 2, h: inner.h + GROUP_PAD * 2 + groupTitleH(it) });
+    const inner = layoutBlock(d, it.members.map((id) => nodeById(d, id)).filter(Boolean).concat(childGroups(d, it)), 0, 0);
+    sizes.set(it, { w: Math.max(inner.w, groupTabWidthEstimate(it)) + GROUP_PAD * 2, h: inner.h + GROUP_PAD * 2 + groupTitleH(it) });
   }
   // Which item each block or group id sits in, so a connector between two
   // things inside different items orders those items.
   const home = new Map();
-  for (const it of items) {
-    home.set(it.id, it);
-    if (it.members) {
-      for (const id of groupNodeIds(d, it)) home.set(id, it);
-      for (const g of d.groups) for (let p = g; p; p = groupById(d, p.parent)) if (p === it) home.set(g.id, it);
-    }
-  }
-  const depth = new Map(items.map((it) => [it, 0]));
-  for (let pass = 0; pass < items.length; pass++) {
-    let changed = false;
-    for (const e of d.edges) {
-      const a = home.get(e.from);
-      const b = home.get(e.to);
-      if (!a || !b || a === b) continue;
-      if (depth.get(a) + 1 > depth.get(b)) { depth.set(b, depth.get(a) + 1); changed = true; }
-    }
-    if (!changed) break;
-  }
-  const layers = [];
-  for (const it of items) (layers[depth.get(it)] = layers[depth.get(it)] || []).push(it);
-  const reversed = d.direction === 'RL' || d.direction === 'BT';
-  if (reversed) layers.reverse();
+  items.forEach((it, i) => {
+    home.set(it.id, i);
+    if (!it.members) return;
+    for (const id of groupNodeIds(d, it)) home.set(id, i);
+    for (const g of d.groups) for (let p = g; p; p = groupById(d, p.parent)) if (p === it) home.set(g.id, i);
+  });
+  const pairs = d.edges.filter((e) => home.has(e.from) && home.has(e.to)).map((e) => [home.get(e.from), home.get(e.to)]);
+  const layers = layerItems(items, pairs);
+  if (d.direction === 'RL' || d.direction === 'BT') layers.reverse();
+
+  const span = (layer) => layer.reduce((sum, it) => sum + (across ? sizes.get(it).h : sizes.get(it).w), 0) + GAP_ACROSS * (layer.length - 1);
+  const widest = Math.max(0, ...layers.map(span));
   let along = 0;
-  let widest = 0;
-  for (const layer of layers.filter(Boolean)) {
-    let side = 0;
-    let thick = 0;
+  for (const layer of layers) {
+    let side = (widest - span(layer)) / 2;
+    const thick = Math.max(...layer.map((it) => (across ? sizes.get(it).w : sizes.get(it).h)));
     for (const it of layer) {
       const sz = sizes.get(it);
-      const [x, y] = across ? [x0 + along, y0 + side] : [x0 + side, y0 + along];
+      // Centred in the layer's thickness too, so a short block lines up with a tall one's middle.
+      const inset = (thick - (across ? sz.w : sz.h)) / 2;
+      const x = Math.round(across ? x0 + along + inset : x0 + side);
+      const y = Math.round(across ? y0 + side : y0 + along + inset);
       if (it.members) {
         const dx = x + GROUP_PAD;
         const dy = y + GROUP_PAD + groupTitleH(it);
         for (const id of groupNodeIds(d, it)) { const n = nodeById(d, id); if (n) { n.x += dx; n.y += dy; } }
       } else { it.x = x; it.y = y; }
-      side += (across ? sz.h : sz.w) + (across ? 50 : 80);
-      thick = Math.max(thick, across ? sz.w : sz.h);
+      side += (across ? sz.h : sz.w) + GAP_ACROSS;
     }
-    widest = Math.max(widest, side - (across ? 50 : 80));
-    along += thick + (across ? 80 : 50);
+    along += thick + GAP_ALONG;
   }
-  along -= across ? 80 : 50;
-  return across ? { w: Math.max(0, along), h: widest } : { w: widest, h: Math.max(0, along) };
+  along = Math.max(0, along - GAP_ALONG);
+  return across ? { w: along, h: widest } : { w: widest, h: along };
+}
+
+// A group's title tab must fit across its box. render.js measures text
+// properly; this is the layout's estimate, about 0.6em a character in bold.
+function groupTabWidthEstimate(g) {
+  const size = g.fontSize || GROUP_FONT_SIZE;
+  return String(g.label || '').length * size * 0.62 + size * 1.6;
 }
 
 // A group's box is derived from its members plus padding, never stored
