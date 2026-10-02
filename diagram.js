@@ -829,7 +829,9 @@ function applyLayout(d, layout, invisible) {
 // closes a loop: `MUX --> ALU` written just after ALU is a forward step, not
 // feedback, once `ALU --> PC` has been cut. Within a layer, items sit near what
 // they connect to (barycentre sweeps), so connectors cross as little as
-// possible. `pairs` are [from, to] indexes into `items`.
+// possible. `pairs` are [from, to] indexes into `items`, optionally with how
+// far across each end sits inside its item (-0.5 to 0.5): a connector to a
+// block at the left of a group pulls its other end left.
 function layerItems(items, pairs) {
   const n = items.length;
   const links = pairs.filter(([a, b]) => a !== b);
@@ -867,14 +869,14 @@ function layerItems(items, pairs) {
   const dense = layers.filter(Boolean);
 
   const near = items.map(() => []);
-  for (const [a, b] of links) { near[a].push(b); near[b].push(a); }
+  for (const [a, b, offA = 0, offB = 0] of links) { near[a].push([b, offB]); near[b].push([a, offA]); }
   const pos = new Array(n);
   dense.forEach((l) => l.forEach((i, k) => { pos[i] = k - (l.length - 1) / 2; }));
   for (let sweep = 0; sweep < 4; sweep++) {
     for (const l of sweep % 2 ? dense.slice().reverse() : dense) {
       const centre = (i) => {
-        const ns = near[i].filter((j) => depth[j] !== depth[i]);
-        return ns.length ? ns.reduce((sum, j) => sum + pos[j], 0) / ns.length : pos[i];
+        const ns = near[i].filter(([j]) => depth[j] !== depth[i]);
+        return ns.length ? ns.reduce((sum, [j, off]) => sum + pos[j] + off, 0) / ns.length : pos[i];
       };
       const want = new Map(l.map((i) => [i, centre(i)]));
       l.sort((x, y) => want.get(x) - want.get(y) || pos[x] - pos[y]);
@@ -913,7 +915,17 @@ function layoutBlock(d, items, x0, y0, direction, links) {
     for (const id of groupNodeIds(d, it)) home.set(id, i);
     for (const g of d.groups) for (let p = g; p; p = groupById(d, p.parent)) if (p === it) home.set(g.id, i);
   });
-  const pairs = links.filter(([a, b]) => home.has(a) && home.has(b)).map(([a, b]) => [home.get(a), home.get(b)]);
+  // Where a block sits across its group, as a fraction of the group's width
+  // (its contents are laid out by now, from 0,0).
+  const across_ = (id, i) => {
+    const it = items[i];
+    const n = nodeById(d, id);
+    if (!it.members || !n) return 0;
+    const span = across ? sizes.get(it).h : sizes.get(it).w;
+    return ((across ? n.y + n.h / 2 : n.x + n.w / 2) + GROUP_PAD) / span - 0.5;
+  };
+  const pairs = links.filter(([a, b]) => home.has(a) && home.has(b))
+    .map(([a, b]) => [home.get(a), home.get(b), across_(a, home.get(a)), across_(b, home.get(b))]);
   const layers = layerItems(items, pairs);
   if (direction === 'RL' || direction === 'BT') layers.reverse();
 
