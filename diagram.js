@@ -48,6 +48,16 @@ const SHAPES = {
   point:             { v11: 'text' },
 };
 
+// What a symbol means, for the ones whose Mermaid shape doesn't say it: to
+// Mermaid a junction is a small circle and a FIFO a horizontal cylinder. Said
+// in a comment so an LLM reading the alt text knows what it's looking at.
+// Only symbols nothing else uses: a trapezoid or a hexagon in pasted Mermaid
+// means whatever its writer meant, so calling it a mux or a bus would be wrong.
+const SYMBOL_MEANING = {
+  buffer: 'buffer/driver', delay: 'delay element', queue: 'queue/FIFO', sum: 'summing junction',
+  junction: 'wire junction', bar: 'bus bar',
+};
+
 // Every name Mermaid 11 accepts in `@{ shape: ... }` for a shape we draw,
 // aliases included, since an LLM may write any of them.
 const V11_NAMES = {
@@ -275,22 +285,30 @@ function flowDirection(d) {
   return sx < 0 ? 'RL' : 'LR';
 }
 
-// Left to right along rows, rows top to bottom: the order a person reads the
-// drawing in, and the order Mermaid's own layout then tends to keep. A row is
-// everything whose top edge is within half a block of the row's first.
-function readingOrder(items) {
-  const byTop = items.slice().sort((p, q) => p.y - q.y || p.x - q.x);
-  const rows = [];
-  for (const it of byTop) {
-    const row = rows[rows.length - 1];
-    if (row && it.y - row[0].y < DEFAULT_H / 2) row.push(it);
-    else rows.push([it]);
+// The order a reader follows the drawing in, which is also the order Mermaid's
+// own layout then tends to keep: along the flow, stage by stage. A diagram
+// flowing down (TD) is read row by row, top to bottom, each row left to right;
+// one flowing across (LR) column by column, left to right, each column top to
+// bottom (BT and RL the other way along). A row or column is everything
+// within half a block of its first.
+function readingOrder(items, direction) {
+  const across = direction === 'LR' || direction === 'RL';
+  const back = direction === 'RL' || direction === 'BT' ? -1 : 1;
+  const [along, side] = across ? ['x', 'y'] : ['y', 'x'];
+  const within = (across ? DEFAULT_W : DEFAULT_H) / 2;
+  const sorted = items.slice().sort((p, q) => back * (p[along] - q[along]) || p[side] - q[side]);
+  const runs = [];
+  for (const it of sorted) {
+    const run = runs[runs.length - 1];
+    if (run && Math.abs(it[along] - run[0][along]) < within) run.push(it);
+    else runs.push([it]);
   }
-  return rows.flatMap((row) => row.sort((p, q) => p.x - q.x));
+  return runs.flatMap((run) => run.sort((p, q) => p[side] - q[side]));
 }
 
 function toMermaid(d) {
-  const lines = ['flowchart ' + flowDirection(d)];
+  const direction = flowDirection(d);
+  const lines = ['flowchart ' + direction];
   // A title read from front matter goes back the same way; the canvas has no
   // place for one, but it mustn't be lost on a round trip.
   if (d.title) lines.unshift('---', 'title: ' + JSON.stringify(d.title), '---');
@@ -306,7 +324,7 @@ function toMermaid(d) {
     .concat(d.nodes.filter((n) => !grouped.has(n.id) && !isPoint(n)));
   const order = [];                      // every node and group, in the order declared
   const declare = (items, pad) => {
-    for (const it of readingOrder(items)) {
+    for (const it of readingOrder(items, direction)) {
       order.push(it);
       if (!it.members) { lines.push(pad + nodeDecl(it)); continue; }
       lines.push(pad + 'subgraph ' + it.id + '[' + quoteLabel(it.label) + ']');
@@ -317,6 +335,8 @@ function toMermaid(d) {
   };
   declare(top, '  ');
   for (const n of d.nodes) if (isPoint(n) && !grouped.has(n.id)) { lines.push('  ' + nodeDecl(n)); order.push(n); }
+  const symbols = order.filter((n) => SYMBOL_MEANING[n.shape]).map((n) => n.id + ' is a ' + SYMBOL_MEANING[n.shape]);
+  if (symbols.length) lines.splice(lines.indexOf('flowchart ' + direction) + 1, 0, '  %% ' + symbols.join('; '));
 
   // Connectors grouped by the block they leave, in that same order, so the
   // text reads as the flow does. Everything that refers to a connector by

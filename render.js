@@ -295,44 +295,99 @@ function facingSide(a, b) {
   return Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'e' : 'w') : (dy >= 0 ? 's' : 'n');
 }
 
+// A shape's visible outline as a closed polygon, curves sampled finely enough
+// that a connector ending on it looks like it touches. Connector ends sit on
+// this, not on the bounding box: an arrow that stops in the air beside a mux's
+// slanted side, or a cylinder's curved top, looks like it missed.
+function outlineOf(n) {
+  const { x, y, w, h } = n;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const slant = Math.min(20, w * 0.2);
+  const arc = (ax, ay, rx, ry, from, to, steps = 12) => Array.from({ length: steps + 1 }, (_, k) => {
+    const a = from + (to - from) * k / steps;
+    return { x: ax + rx * Math.cos(a), y: ay + ry * Math.sin(a) };
+  });
+  const P = Math.PI;
+  switch (n.shape) {
+    case 'circle': case 'doublecircle': case 'junction': case 'sum':
+      return arc(cx, cy, w / 2, h / 2, 0, 2 * P, 48);
+    case 'diamond': return [{ x: cx, y }, { x: x + w, y: cy }, { x: cx, y: y + h }, { x, y: cy }];
+    case 'hexagon': {
+      const i = Math.min(18, w * 0.2);
+      return [{ x: x + i, y }, { x: x + w - i, y }, { x: x + w, y: cy }, { x: x + w - i, y: y + h }, { x: x + i, y: y + h }, { x, y: cy }];
+    }
+    case 'parallelogram': return [{ x: x + slant, y }, { x: x + w, y }, { x: x + w - slant, y: y + h }, { x, y: y + h }];
+    case 'parallelogram_alt': return [{ x, y }, { x: x + w - slant, y }, { x: x + w, y: y + h }, { x: x + slant, y: y + h }];
+    case 'trapezoid': return [{ x: x + slant, y }, { x: x + w - slant, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+    case 'trapezoid_alt': return [{ x, y }, { x: x + w, y }, { x: x + w - slant, y: y + h }, { x: x + slant, y: y + h }];
+    case 'buffer': return [{ x, y }, { x: x + w, y: cy }, { x, y: y + h }];
+    case 'stadium': {
+      const r = Math.min(h / 2, w / 2);
+      return arc(x + w - r, cy, r, h / 2, -P / 2, P / 2).concat(arc(x + r, cy, r, h / 2, P / 2, 3 * P / 2));
+    }
+    case 'queue': {
+      const r = Math.min(12, w / 6);
+      return arc(x + w - r, cy, r, h / 2, -P / 2, P / 2).concat(arc(x + r, cy, r, h / 2, P / 2, 3 * P / 2));
+    }
+    case 'delay': {
+      const r = Math.min(h / 2, w / 2);
+      return [{ x, y }].concat(arc(x + w - r, cy, r, h / 2, -P / 2, P / 2), [{ x, y: y + h }]);
+    }
+    case 'cylinder': {
+      const ry = Math.min(12, h / 4);
+      return arc(cx, y + ry, w / 2, ry, P, 2 * P).concat(arc(cx, y + h - ry, w / 2, ry, 0, P));
+    }
+    case 'flag':
+      return [{ x: x + w, y }, { x: x + w, y: y + h }].concat(Array.from({ length: 13 }, (_, k) => {
+        const t = 1 - k / 12;
+        return { x: x + 2 * (1 - t) * t * slant, y: y + h * t };
+      }));
+    default: return [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  }
+}
+
+// Where the ray from `from` in direction `dir` first meets `n`'s outline, or
+// null if it doesn't.
+function rayToOutline(n, from, dir) {
+  const pts = outlineOf(n);
+  let best = null;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const q = pts[(i + 1) % pts.length];
+    const ex = q.x - p.x;
+    const ey = q.y - p.y;
+    const den = dir.x * ey - dir.y * ex;
+    if (Math.abs(den) < 1e-9) continue;
+    const t = ((p.x - from.x) * ey - (p.y - from.y) * ex) / den;
+    const u = ((p.x - from.x) * dir.y - (p.y - from.y) * dir.x) / den;
+    if (t >= 0 && u >= -1e-6 && u <= 1 + 1e-6 && (best === null || t < best)) best = t;
+  }
+  return best === null ? null : { x: from.x + dir.x * best, y: from.y + dir.y * best };
+}
+
 // Where the line from a node's centre towards `toward` leaves its outline.
-// Round and diamond shapes are met at their real edge -- a straight connector
-// stopping at the invisible box around a circle looks like it missed.
 function outlinePoint(n, toward) {
   const c = centerOf(n);
   const dx = toward.x - c.x;
   const dy = toward.y - c.y;
   if (!dx && !dy) return c;
-  const rx = n.w / 2;
-  const ry = n.h / 2;
-  let t;
-  if (['circle', 'doublecircle', 'junction', 'sum'].includes(n.shape)) t = 1 / Math.hypot(dx / rx, dy / ry);
-  else if (n.shape === 'diamond') t = 1 / (Math.abs(dx) / rx + Math.abs(dy) / ry);
-  else t = Math.min(dx ? rx / Math.abs(dx) : Infinity, dy ? ry / Math.abs(dy) : Infinity);
-  return { x: c.x + dx * t, y: c.y + dy * t };
+  // Cast inwards from beyond the box, so the hit is the outline's outer edge.
+  const far = Math.hypot(n.w, n.h) / Math.hypot(dx, dy);
+  const from = { x: c.x + dx * far, y: c.y + dy * far };
+  return rayToOutline(n, from, { x: -dx, y: -dy }) || c;
 }
 
 // `t` runs 0..1 along the side, left-to-right or top-to-bottom. The point is
-// on the shape's real outline: for a circle or a diamond the spot on the
-// bounding box is pushed straight in until it meets the curve or the slope, so
-// a line attached anywhere along the side still touches the shape.
+// on the shape's real outline: the spot on the bounding box is pushed straight
+// in until it meets the shape, so a line attached anywhere along a slanted,
+// curved or pointed side still touches it.
 function anchorPoint(n, side, t) {
   const x = side === 'n' || side === 's' ? n.x + n.w * t : side === 'w' ? n.x : n.x + n.w;
   const y = side === 'e' || side === 'w' ? n.y + n.h * t : side === 'n' ? n.y : n.y + n.h;
-  const round = ['circle', 'doublecircle', 'junction', 'sum'].includes(n.shape);
-  if ((!round && n.shape !== 'diamond') || !n.w || !n.h) return { x, y };
-  const c = centerOf(n);
-  const rx = n.w / 2;
-  const ry = n.h / 2;
-  // How far out from the centre the outline is, as a fraction of the half
-  // size, at this offset along the side.
-  const reach = (off) => round ? Math.sqrt(Math.max(0, 1 - off * off)) : Math.max(0, 1 - Math.abs(off));
-  if (side === 'n' || side === 's') {
-    const k = reach((x - c.x) / rx);
-    return { x, y: c.y + (side === 'n' ? -1 : 1) * ry * k };
-  }
-  const k = reach((y - c.y) / ry);
-  return { x: c.x + (side === 'w' ? -1 : 1) * rx * k, y };
+  if (!n.w || !n.h || !n.shape) return { x, y };
+  const dir = DIRS[side];
+  return rayToOutline(n, { x: x + dir.x, y: y + dir.y }, { x: -dir.x, y: -dir.y }) || { x, y };
 }
 
 // The spot on `n`'s outline nearest to `p`, as the side and position an edge
@@ -625,9 +680,9 @@ function edgeRoutes(d) {
   // with a tiny kink because their centres are two pixels apart. Only when
   // both ends are automatic and alone on their side -- a pinned port or a fan
   // takes precedence.
-  // Likewise when one end was attached at an exact spot: a free end on a
-  // facing block lines up with it, so a connector dropped level with the other
-  // block comes out dead straight rather than with a small jog in it.
+  // Likewise when only one end is alone on its side: it lines up with the
+  // other end's spot (in a fan, or attached by hand), so the connector comes
+  // out dead straight rather than with a small jog in it.
   for (const s of slots) {
     if (!s || s.self || s.straight) continue;
     const horiz = (s.from.side === 'e' && s.to.side === 'w') || (s.from.side === 'w' && s.to.side === 'e');
@@ -642,10 +697,12 @@ function edgeRoutes(d) {
       const mid = (lo + hi) / 2;
       s.from.t = (mid - s.a[pos]) / s.a[len];
       s.to.t = (mid - s.b[pos]) / s.b[len];
-    } else if (s.from.solo && s.to.pinned) {
+    } else if (s.from.solo) {
+      // Alone on its side, this end can go wherever the other end is -- a spot
+      // in a fan, or one attached by hand -- and make the connector straight.
       const c = anchorPoint(s.b, s.to.side, s.to.t)[pos];
       if (within(s.a, c)) s.from.t = (c - s.a[pos]) / s.a[len];
-    } else if (s.to.solo && s.from.pinned) {
+    } else if (s.to.solo) {
       const c = anchorPoint(s.a, s.from.side, s.from.t)[pos];
       if (within(s.b, c)) s.to.t = (c - s.b[pos]) / s.b[len];
     }
