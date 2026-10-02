@@ -583,7 +583,14 @@
       b.className = 'swatch' + (color === current ? ' on' : '');
       b.title = color || 'default';
       b.style.background = color || (asDot ? '#555555' : '#ffffff');
-      b.addEventListener('click', () => { closeFloats(); apply(color); });
+      // Shown on the diagram while the pointer rests on it; kept on click.
+      b.addEventListener('pointerenter', () => { cancelPreview(); beginPreview(); apply(color); });
+      b.addEventListener('pointerleave', () => cancelPreview());
+      b.addEventListener('click', () => {
+        cancelPreview();
+        closeFloats();
+        apply(color);
+      });
       row.appendChild(b);
     }
     // Any other colour, from the system colour picker.
@@ -593,7 +600,9 @@
     const input = document.createElement('input');
     input.type = 'color';
     input.value = current && /^#[0-9a-f]{6}$/i.test(current) ? current : '#2563eb';
-    input.addEventListener('change', () => { closeFloats(); apply(input.value); });
+    // Live while dragging in the picker, one undo step for the whole pick.
+    input.addEventListener('input', () => { picking = true; beginPreview(); apply(input.value); });
+    input.addEventListener('change', () => { beginPreview(); apply(input.value); endPreview(); picking = false; closeFloats(); });
     custom.appendChild(input);
     row.appendChild(custom);
     return row;
@@ -766,7 +775,12 @@
   }
 
   let pickerDone = null;
+  let picking = false;     // the colour picker's preview is showing
   function closeFloats() {
+    // A colour dragged to in the picker is kept when the popover goes; one
+    // only hovered over is not.
+    if (picking) endPreview(); else cancelPreview();
+    picking = false;
     menu.classList.add('hidden');
     popover.classList.add('hidden');
     if (!picker.classList.contains('hidden')) closePicker(null);

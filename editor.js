@@ -146,6 +146,10 @@ function initEditor(hostEl, onChange, onViewChange, onContextMenu, extra) {
   svg.addEventListener('contextmenu', onContext);
   svg.addEventListener('pointerleave', () => { if (ghost && !drag) { ghost = null; render(); } });
   window.addEventListener('keydown', onKeyDown);
+  // Two presses only make a double click with nothing in between: a key, or
+  // a click on the toolbar or a menu, starts over.
+  window.addEventListener('keydown', () => { lastPress = null; }, true);
+  window.addEventListener('pointerdown', (ev) => { if (!svg.contains(ev.target)) lastPress = null; }, true);
 
   // Drag-and-drop from the palette. The shape being dragged is announced by
   // the shell (dataTransfer can't be read during dragover), so a preview of it
@@ -742,9 +746,35 @@ function removeSelectionFromGroup() {
   return null;
 }
 
+// A live preview: a colour shown on the diagram while the pointer is on a
+// swatch or dragging in the colour picker. The first change pushes one undo
+// step; endPreview keeps the result, cancelPreview puts things back.
+let previewing = false;
+let previewPushed = false;
+function beginPreview() { previewing = true; }
+function endPreview() {
+  const pushed = previewPushed;
+  previewing = previewPushed = false;
+  if (pushed) commit();
+}
+function cancelPreview() {
+  if (previewPushed) model = JSON.parse(undoStack.pop());
+  previewing = previewPushed = false;
+  render();
+}
+// Returns true when the change was a preview (shown, not yet committed).
+function previewStep(apply) {
+  if (!previewing) return false;
+  if (!previewPushed) { pushUndo(); previewPushed = true; }
+  apply();
+  render();
+  return true;
+}
+
 function applyToNodes(fn) {
   const nodes = selectedNodes();
   if (!nodes.length) return;
+  if (previewStep(() => nodes.forEach(fn))) return;
   pushUndo();
   nodes.forEach(fn);
   commit();
@@ -755,6 +785,7 @@ function applyToNodes(fn) {
 function applyToGroups(fn) {
   const groups = model.groups.filter((g) => sel.has(g.id));
   if (!groups.length) return;
+  if (previewStep(() => groups.forEach(fn))) return;
   pushUndo();
   groups.forEach(fn);
   commit();
@@ -762,6 +793,7 @@ function applyToGroups(fn) {
 
 function applyToEdge(fn) {
   if (selEdge < 0 || !model.edges[selEdge]) return;
+  if (previewStep(() => fn(model.edges[selEdge]))) return;
   pushUndo();
   fn(model.edges[selEdge]);
   commit();
