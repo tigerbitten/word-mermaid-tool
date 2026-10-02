@@ -793,7 +793,13 @@ function buildExportSvg(d) {
 
 // --- the picture that goes into the document ----------------------------
 
-const RASTER_SCALE = 3;          // oversample, so the PNG stays sharp in print
+// Pixels per inch at the size the picture has in Word: enough to stay sharp in
+// print and when the picture is enlarged a little. (A fixed 3x oversample gave
+// about 255.) Browsers refuse canvases past a size, WebKit (Word for Mac) the
+// strictest, so a very big diagram gets fewer.
+const TARGET_PPI = 400;
+const CANVAS_MAX_SIDE = 16384;
+const CANVAS_MAX_PIXELS = 16.7e6;
 // Placed so a label at the default size lands at 11pt -- the size of the body
 // text around it. At a literal 1px = 0.75pt it came out at 9.75pt, a visibly
 // smaller, fussier-looking diagram than the document it sits in.
@@ -867,20 +873,22 @@ async function renderPng(d) {
     img.src = dataUrl;
   });
 
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(width * RASTER_SCALE);
-  canvas.height = Math.ceil(height * RASTER_SCALE);
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
   // Wide diagrams are scaled down to the text column rather than overflowing
-  // it; the declared DPI rises to match, so the picture still lands at the
+  // it; the declared DPI follows the pixels, so the picture still lands at the
   // size we asked for.
   let w = width * PX_TO_PT;
   let h = height * PX_TO_PT;
   if (w > MAX_DOC_WIDTH_PT) { h *= MAX_DOC_WIDTH_PT / w; w = MAX_DOC_WIDTH_PT; }
+
+  const scale = Math.min(TARGET_PPI * (w / 72) / width, CANVAS_MAX_SIDE / Math.max(width, height),
+    Math.sqrt(CANVAS_MAX_PIXELS / (width * height)));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(width * scale);
+  canvas.height = Math.ceil(height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
   const raw = atob(canvas.toDataURL('image/png').split(',')[1]);
   const bytes = new Uint8Array(raw.length);

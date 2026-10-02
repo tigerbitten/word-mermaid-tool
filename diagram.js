@@ -264,6 +264,9 @@ function readingOrder(items) {
 
 function toMermaid(d) {
   const lines = ['flowchart ' + flowDirection(d)];
+  // A title read from front matter goes back the same way; the canvas has no
+  // place for one, but it mustn't be lost on a round trip.
+  if (d.title) lines.unshift('---', 'title: ' + JSON.stringify(d.title), '---');
 
   // Groups and loose blocks are declared in reading order, and so are the
   // blocks inside each group. Nodes are declared inside their subgraph rather
@@ -417,11 +420,13 @@ function readProps(body) {
 // quote-aware, because hardware labels are full of brackets -- `addr[31:0]`
 // inside `A["addr[31:0]"]` must not end the node at its first `]`. `-` is
 // deliberately not an id character: without that, the extremely common `A-->B`
-// reads as a node called `A--`.
+// reads as a node called `A--`. A single `-` between id characters is part
+// of the id, though: Mermaid reads `user-svc` as one node, and LLMs write
+// such ids all the time.
 function readNodeRef(s, i) {
   while (i < s.length && /\s/.test(s[i])) i++;
   const start = i;
-  while (i < s.length && /[A-Za-z0-9_]/.test(s[i])) i++;
+  while (i < s.length && (/[A-Za-z0-9_]/.test(s[i]) || (s[i] === '-' && i > start && /[A-Za-z0-9_]/.test(s[i + 1] || '')))) i++;
   if (i === start) return null;
   const id = s.slice(start, i);
 
@@ -440,9 +445,20 @@ function readNodeRef(s, i) {
     if (s[from] === '"') from = skipQuoted(s, from);
     const end = s.indexOf(close, from);
     if (end === -1) continue;
-    return { id, shape, label: unquoteLabel(s.slice(i + open.length, end)), next: skipClass(s, end + close.length) };
+    const md = markdownLabel(unquoteLabel(s.slice(i + open.length, end)));
+    return { id, shape, label: md.label, bold: md.bold, next: skipClass(s, end + close.length) };
   }
   return { id, shape: null, label: null, next: skipClass(s, i) };
+}
+
+// Mermaid's markdown string, "`**bold** text`": the backticks and the bold
+// markers are markup, not text. A label that is bold throughout becomes a bold
+// block; bold on part of one can't be shown, so only the markers go.
+function markdownLabel(label) {
+  const m = label.match(/^`([\s\S]*)`$/);
+  if (!m) return { label, bold: false };
+  const bold = /^\*\*[^*]+\*\*$/.test(m[1].trim());
+  return { label: m[1].replace(/\*\*/g, '').trim(), bold };
 }
 
 // `A:::hot` attaches a CSS class. We have no use for the class, but it must be
@@ -484,6 +500,20 @@ function readAnchor(s) {
   return { side: s[0], t: s.length > 1 ? +s.slice(1) : null };
 }
 
+function splitStatements(line) {
+  const out = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { i = skipQuoted(line, i) - 1; continue; }
+    if ('[({'.includes(c)) depth++;
+    else if (')]}'.includes(c)) depth = Math.max(0, depth - 1);
+    else if (c === ';' && depth === 0) { out.push(line.slice(start, i)); start = i + 1; }
+  }
+  out.push(line.slice(start));
+  return out;
+}
+
 function parseMermaid(text) {
   const d = newDiagram();
   const layout = {};
@@ -501,17 +531,33 @@ function parseMermaid(text) {
       const shape = ref.shape || 'rect';
       const [w, h] = defaultSize(shape);
       n = { id: ref.id, label: ref.label != null ? ref.label : (LABELLESS.has(shape) ? '' : ref.id),
-            shape, x: 0, y: 0, w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: false };
+            shape, x: 0, y: 0, w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: !!ref.bold };
       d.nodes.push(n);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
       if (ref.label != null) n.label = ref.label;
       if (ref.shape) n.shape = ref.shape;
+      if (ref.bold) n.bold = true;
     }
     return n;
   };
 
-  for (const rawLine of stripFence(text).split('\n')) {
+  // Front matter (`---` / `title: ...` / `---`) before the header: its title
+  // is kept and written back; nothing else in it means anything here.
+  let lines = stripFence(text).split('\n');
+  if (lines.length && lines[0].trim() === '---') {
+    const close = lines.findIndex((l, k) => k > 0 && l.trim() === '---');
+    if (close === -1) throw new Error('front matter opened with --- is never closed');
+    const title = lines.slice(1, close).map((l) => l.match(/^\s*title:\s*(.*?)\s*$/)).find(Boolean);
+    if (title && title[1]) d.title = title[1].replace(/^(["'])(.*)\1$/, '$2');
+    lines = lines.slice(close + 1);
+  }
+  // `;` ends a statement just as a newline does (`flowchart LR; A-->B;`), so
+  // statements are split there too -- but not inside a quoted label or a
+  // shape's brackets, and never in a `%%` line.
+  lines = lines.flatMap((l) => l.trim().startsWith('%%') ? [l] : splitStatements(l));
+
+  for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
 
@@ -592,7 +638,7 @@ function parseMermaid(text) {
       for (const a of prev) {
         for (const b of targets) {
           const e = Object.assign(newEdge(a.id, b.id), linkFromToken(link[1]));
-          e.label = link[2] ? unquoteLabel(link[2]) : '';
+          e.label = link[2] ? markdownLabel(unquoteLabel(link[2])).label : '';
           d.edges.push(e);
         }
       }
