@@ -479,9 +479,9 @@ function crossesBox(u, v, r) {
 }
 
 // Running through another block is allowed -- something has to be drawn when
-// there's no way round -- but costs as much as a long detour, so any clear
-// route wins.
-const THROUGH_BLOCK = 2000;
+// there's no way round -- but costs more than any detour or shared stretch,
+// so any route clear of blocks wins.
+const THROUGH_BLOCK = 20000;
 // Running along a connector already drawn, closer than this, reads as one
 // line: it costs as if that stretch were three times as long.
 const SHARED_LANE = 6;
@@ -563,6 +563,10 @@ function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
   const nearLanes = lanes.filter(([p, q]) => near({ x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), w: Math.abs(p.x - q.x), h: Math.abs(p.y - q.y) }));
 
   const pick = () => {
+    // The same lane offered twice (two blocks lined up) is the same routes twice.
+    const uniq = (vs) => [...new Set(vs.map((v) => Math.round(v)))];
+    const xs_ = uniq(xs);
+    const ys_ = uniq(ys);
     const cands = [
       [{ x: midX, y: a0.y }, { x: midX, y: b0.y }],
       [{ x: a0.x, y: midY }, { x: b0.x, y: midY }],
@@ -570,10 +574,10 @@ function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
       [{ x: b0.x, y: a0.y }],
       [{ x: a0.x, y: b0.y }],
     ];
-    for (const x of xs) cands.push([{ x, y: a0.y }, { x, y: b0.y }]);
-    for (const y of ys) cands.push([{ x: a0.x, y }, { x: b0.x, y }]);
-    for (const x of xs.concat(midX)) {
-      for (const y of ys.concat(midY)) {
+    for (const x of xs_) cands.push([{ x, y: a0.y }, { x, y: b0.y }]);
+    for (const y of ys_) cands.push([{ x: a0.x, y }, { x: b0.x, y }]);
+    for (const x of uniq(xs_.concat(midX))) {
+      for (const y of uniq(ys_.concat(midY))) {
         cands.push([{ x, y: a0.y }, { x, y }, { x: b0.x, y }]);
         cands.push([{ x: a0.x, y }, { x, y }, { x, y: b0.y }]);
       }
@@ -597,12 +601,20 @@ function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
   };
   // A route through a block gets the gaps beside that block to try, and so on
   // for whatever the detour runs into -- a few rounds, not every block at once.
+  // If the way round one block runs into two more, the route stays put, so
+  // then the gaps of the nearest few other blocks go in: the clear lane is
+  // usually just past them.
+  const tried = new Set();
   let best = pick();
-  for (let round = 0; best && best.clutter >= THROUGH_BLOCK && round < 3; round++) {
+  for (let round = 0; best && best.clutter >= THROUGH_BLOCK && round < 4; round++) {
     const pts = simplify([p0, a0].concat(best.c, [b0, p1]));
-    const hit = obstacles.filter((r) => pts.some((u, i) => i && crossesBox(pts[i - 1], u, r)));
+    let hit = obstacles.filter((r) => !tried.has(r) && pts.some((u, i) => i && crossesBox(pts[i - 1], u, r)));
+    if (!hit.length) {
+      const dist = (r) => Math.hypot(r.x + r.w / 2 - midX, r.y + r.h / 2 - midY);
+      hit = obstacles.filter((r) => !tried.has(r)).sort((p, q) => dist(p) - dist(q)).slice(0, 8);
+    }
     if (!hit.length) break;
-    for (const r of hit) { xs.push(r.x - M, r.x + r.w + M); ys.push(r.y - M, r.y + r.h + M); }
+    for (const r of hit) { tried.add(r); xs.push(r.x - M, r.x + r.w + M); ys.push(r.y - M, r.y + r.h + M); }
     best = pick();
   }
   // Nothing acceptable (the blocks overlap, say): a single corner is the least
@@ -692,14 +704,24 @@ function edgeRoutes(d) {
     // two sides at each end; the facing one isn't always the clean one -- it
     // can send the line across a group border or another connector's path.
     // Each pairing is tried and the cheapest route's sides kept.
+    // And when the facing sides' best route still runs through a block (the
+    // target straight below, past a block in between), every pairing is tried:
+    // out of a side and down the clear lane beside everything beats through.
     const apart = (p, q, pos, len) => p[pos] + p[len] <= q[pos] || q[pos] + q[len] <= p[pos];
-    if (!fa.side && !ta.side && a.shape !== 'diamond' && apart(a, b, 'x', 'w') && apart(a, b, 'y', 'h')) {
+    if (!fa.side && !ta.side) {
       const ca = centerOf(a);
       const cb = centerOf(b);
       const h = (from, to) => (to.x > from.x ? 'e' : 'w');
       const v = (from, to) => (to.y > from.y ? 's' : 'n');
+      let pairings = null;
+      if (a.shape !== 'diamond' && apart(a, b, 'x', 'w') && apart(a, b, 'y', 'h')) {
+        pairings = [[fromSide, toSide], [h(ca, cb), v(cb, ca)], [v(ca, cb), h(cb, ca)], [h(ca, cb), h(cb, ca)], [v(ca, cb), v(cb, ca)]];
+      } else if (sideCost(a, fromSide, b, toSide, blocks) >= THROUGH_BLOCK) {
+        pairings = [[fromSide, toSide]];
+        for (const sa of 'nesw') for (const sb of 'nesw') pairings.push([sa, sb]);
+      }
       let best = Infinity;
-      for (const [sa, sb] of [[fromSide, toSide], [h(ca, cb), v(cb, ca)], [v(ca, cb), h(cb, ca)], [h(ca, cb), h(cb, ca)], [v(ca, cb), v(cb, ca)]]) {
+      for (const [sa, sb] of pairings || []) {
         const cost = sideCost(a, sa, b, sb, blocks);
         if (cost < best - 1) { best = cost; fromSide = sa; toSide = sb; }
       }
