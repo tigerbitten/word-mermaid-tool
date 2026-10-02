@@ -11,6 +11,7 @@ vm.runInContext(fs.readFileSync(__dirname + '/diagram.js', 'utf8') +
 const { parseMermaid, toMermaid, quoteLabel, unquoteLabel } = ctx;
 
 let failed = 0;
+let out;
 const check = (name, ok, detail) => {
   console.log((ok ? 'PASS ' : 'FAIL ') + name + (ok ? '' : ': ' + JSON.stringify(detail)));
   if (!ok) failed++;
@@ -88,6 +89,22 @@ for (const [src, want] of [['flowchart TD\n  A --> B & C & D & E & F & G', 'TD']
   check('direction kept: ' + src.split('\n')[1].trim(), toMermaid(parseMermaid(src)).startsWith('flowchart ' + want), toMermaid(parseMermaid(src)).split('\n')[0]);
 }
 
+// Looks and extras an LLM wrote are kept.
+const styled = '---\ntitle: T\nconfig:\n  theme: neutral\n---\n%%{init: {"flowchart": {"curve": "basis"}}}%%\nflowchart LR\n  %% a note\n  accTitle: Pay\n' +
+  '  A:::store --> B\n  classDef store fill:lightblue,stroke:rgb(70,130,180),stroke-width:2px\n  style B fill:#fee,stroke:red,stroke-dasharray:5 5,color:darkred\n' +
+  '  subgraph S\n    B\n  end\n  style S fill:#fffbe6\n  linkStyle default stroke:gray\n  click A "https://x.y"';
+d = parseMermaid(styled);
+out = toMermaid(d);
+check('named and rgb colours read', d.nodes[0].fill === '#add8e6' && d.nodes[0].stroke === '#4682b4' && d.nodes[0].strokeWidth === 2 &&
+  d.nodes[1].stroke === '#ff0000' && d.nodes[1].dash && d.nodes[1].color === '#8b0000' && d.groups[0].fill === '#fffbe6', d.nodes);
+check('classes, init, comments, config, acc and click written back', /classDef store fill:lightblue/.test(out) && /class A store/.test(out) &&
+  /^---\ntitle: "T"\nconfig:\n  theme: neutral\n---\n%%\{init/.test(out) && /%% a note/.test(out) && /accTitle: Pay/.test(out) &&
+  /click A "https:\/\/x.y"/.test(out) && /style S fill:#fffbe6/.test(out) && /linkStyle default stroke:#808080/.test(out), out);
+check('styled round trip is stable', toMermaid(parseMermaid(out)) === out, out);
+d = parseMermaid('flowchart LR\n  A --o B\n  A x--x C\n  A ---> D\n  A -..-> E');
+out = toMermaid(d);
+check('circle/cross ends and long links written back', /A --o B/.test(out) && /A x--x C/.test(out) && /A ---> D/.test(out) && /A -\.\.-> E/.test(out), out);
+
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');
 check('a state diagram reads as a flowchart', d.from === 'state diagram' && edges(d).includes('Idle>Busy|go') && d.groups[0].id === 'Busy' &&
@@ -148,7 +165,7 @@ check('older escapes still read', unquoteLabel('"a #gt; b #124; c"') === 'a > b 
 
 // For an LLM: symbols named, blocks in flow order.
 d = parseMermaid('flowchart LR\n  %% J1 is a wire junction\n  A --> J1@{ shape: sm-circ }\n  J1 --> S@{ shape: cross-circ }\n  H{{Hex}} --> A');
-const out = toMermaid(d);
+out = toMermaid(d);
 check('junction and summing junction named in a comment', /%% .*J1 is a wire junction.*S is a summing junction/.test(out), out.split('\n')[1]);
 check('a junction from an older build (sm-circ + comment) stays a junction', d.nodes.find((n) => n.id === 'J1').shape === 'junction', d.nodes);
 check('a start dot is not called a junction', !/is a wire junction/.test(toMermaid(parseMermaid('flowchart LR\n  S@{ shape: sm-circ } --> A'))), '');

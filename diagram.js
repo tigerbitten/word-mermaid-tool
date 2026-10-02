@@ -255,6 +255,62 @@ function unquoteLabel(raw) {
       : code === 'quot' ? '"' : code === 'lt' ? '<' : code === 'gt' ? '>' : ENTITIES[code] || m);
 }
 
+// CSS colour names LLMs write in Mermaid styles, as hex.
+const COLOR_NAMES = {
+  black: '#000000', white: '#ffffff', red: '#ff0000', green: '#008000', blue: '#0000ff', yellow: '#ffff00',
+  orange: '#ffa500', purple: '#800080', pink: '#ffc0cb', gray: '#808080', grey: '#808080', brown: '#a52a2a',
+  cyan: '#00ffff', magenta: '#ff00ff', lime: '#00ff00', olive: '#808000', maroon: '#800000', navy: '#000080',
+  teal: '#008080', silver: '#c0c0c0', gold: '#ffd700', beige: '#f5f5dc', coral: '#ff7f50', salmon: '#fa8072',
+  khaki: '#f0e68c', wheat: '#f5deb3', ivory: '#fffff0', lavender: '#e6e6fa', tan: '#d2b48c', plum: '#dda0dd',
+  orchid: '#da70d6', thistle: '#d8bfd8', violet: '#ee82ee', indigo: '#4b0082', crimson: '#dc143c', tomato: '#ff6347',
+  chocolate: '#d2691e', turquoise: '#40e0d0', aquamarine: '#7fffd4', azure: '#f0ffff', aliceblue: '#f0f8ff',
+  honeydew: '#f0fff0', mintcream: '#f5fffa', seashell: '#fff5ee', snow: '#fffafa', linen: '#faf0e6',
+  lightblue: '#add8e6', lightgreen: '#90ee90', lightyellow: '#ffffe0', lightgray: '#d3d3d3', lightgrey: '#d3d3d3',
+  lightpink: '#ffb6c1', lightcoral: '#f08080', lightcyan: '#e0ffff', lightsalmon: '#ffa07a', lightsteelblue: '#b0c4de',
+  lightskyblue: '#87cefa', lightseagreen: '#20b2aa', lemonchiffon: '#fffacd', mistyrose: '#ffe4e1', peachpuff: '#ffdab9',
+  palegreen: '#98fb98', paleturquoise: '#afeeee', powderblue: '#b0e0e6', skyblue: '#87ceeb', steelblue: '#4682b4',
+  royalblue: '#4169e1', dodgerblue: '#1e90ff', deepskyblue: '#00bfff', cornflowerblue: '#6495ed', slateblue: '#6a5acd',
+  darkblue: '#00008b', darkgreen: '#006400', darkred: '#8b0000', darkorange: '#ff8c00', darkgray: '#a9a9a9',
+  darkgrey: '#a9a9a9', darkviolet: '#9400d3', darkcyan: '#008b8b', darkslategray: '#2f4f4f', dimgray: '#696969',
+  slategray: '#708090', gainsboro: '#dcdcdc', whitesmoke: '#f5f5f5', forestgreen: '#228b22', seagreen: '#2e8b57',
+  mediumseagreen: '#3cb371', limegreen: '#32cd32', springgreen: '#00ff7f', yellowgreen: '#9acd32', firebrick: '#b22222',
+  indianred: '#cd5c5c', hotpink: '#ff69b4', deeppink: '#ff1493', mediumpurple: '#9370db', rebeccapurple: '#663399',
+  goldenrod: '#daa520', sandybrown: '#f4a460', sienna: '#a0522d', peru: '#cd853f', moccasin: '#ffe4b5',
+  papayawhip: '#ffefd5', blanchedalmond: '#ffebcd', cornsilk: '#fff8dc', oldlace: '#fdf5e6', floralwhite: '#fffaf0',
+  ghostwhite: '#f8f8ff', midnightblue: '#191970', darkslateblue: '#483d8b', cadetblue: '#5f9ea0', mediumaquamarine: '#66cdaa',
+};
+
+// A Mermaid style colour as hex: #rgb / #rrggbb as written, rgb()/rgba() and
+// names converted; anything else (a gradient, `var()`) is not a colour here.
+function cssColor(v) {
+  v = String(v || '').trim().toLowerCase();
+  if (/^#[0-9a-f]{3}([0-9a-f]{3})?([0-9a-f]{2})?$/.test(v)) return v;
+  const rgb = v.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (rgb) return '#' + rgb.slice(1, 4).map((c) => Math.min(255, +c).toString(16).padStart(2, '0')).join('');
+  return COLOR_NAMES[v] || null;
+}
+
+// What a style declaration (`fill:#f96,stroke:#333,stroke-width:2px`) says
+// about a block's look, property by property; the first mention wins.
+function readLook(decl) {
+  const look = {};
+  // Split at commas and semicolons, but not those inside rgb( ... ).
+  for (const part of String(decl || '').split(/[,;](?![^(]*\))/)) {
+    const m = part.match(/^\s*([\w-]+)\s*:\s*(.+?)\s*(!important)?\s*$/);
+    if (!m) continue;
+    const [, key, value] = m;
+    const set = (k, v) => { if (!(k in look) && v != null) look[k] = v; };
+    if (key === 'fill') set('fill', value === 'none' || value === 'transparent' ? 'none' : cssColor(value));
+    if (key === 'stroke') set('stroke', value === 'none' ? 'none' : cssColor(value));
+    if (key === 'stroke-width') set('strokeWidth', parseFloat(value) || null);
+    if (key === 'stroke-dasharray') set('dash', !/^(0|none)$/.test(value));
+    if (key === 'color') set('color', cssColor(value));
+    if (key === 'font-size') set('fontSize', parseFloat(value) || null);
+    if (key === 'font-weight') set('bold', /bold|[6-9]00/.test(value));
+  }
+  return look;
+}
+
 function nodeDecl(n) {
   const s = SHAPES[n.shape] || SHAPES.rect;
   // A single space, not "": Mermaid shows a node's id in place of an empty
@@ -273,9 +329,18 @@ function linkToken(e) {
   // From the menu's "heavy" up, so a connector drawn heavy reads as thick to
   // an LLM and to any other renderer, not just through its linkStyle.
   const heavy = (e.width || DEFAULT_EDGE_W) >= 2.5;
-  if (e.dash === 'dotted') return e.head === 'none' ? '-.-' : e.head === 'both' ? '<-.->' : '-.->';
-  if (heavy) return e.head === 'none' ? '===' : e.head === 'both' ? '<==>' : '==>';
-  return e.head === 'none' ? '---' : e.head === 'both' ? '<-->' : '-->';
+  let t;
+  if (e.dash === 'dotted') t = e.head === 'none' ? '-.-' : e.head === 'both' ? '<-.->' : '-.->';
+  else if (heavy) t = e.head === 'none' ? '===' : e.head === 'both' ? '<==>' : '==>';
+  else t = e.head === 'none' ? '---' : e.head === 'both' ? '<-->' : '-->';
+  // A longer link (`--->`) asks Mermaid for more room between its ends.
+  if (e.length > 1) t = t.replace(/(\.|-(?=-)|=(?==))/, (c) => c.repeat(e.length));
+  // Circle and cross ends (`--o`, `x--x`) in place of arrowheads.
+  if (e.mark && e.head !== 'none') {
+    const m = e.mark === 'circle' ? 'o' : 'x';
+    t = t.replace(/>$/, m).replace(/^</, m);
+  }
+  return t;
 }
 
 function edgeDecl(e) {
@@ -286,12 +351,24 @@ function edgeDecl(e) {
 // Only emitted when it carries information: a borderless text label, a
 // non-default fill, text size or weight. All standard Mermaid `style`
 // statements, so they survive a round-trip through any other Mermaid tool.
-function styleDecl(n) {
+// What the block's look adds to its classes', as a `style` line. A fill is
+// written with a dark border, as the canvas draws it: Mermaid's own default
+// border is lilac.
+function styleDecl(n, d) {
+  const base = readLook([].concat((n.classes || []).map((c) => (d.classDefs || {})[c]).reverse(), (d.classDefs || {}).default).filter(Boolean).join(','));
   const parts = [];
   if (n.shape === 'text') parts.push('fill:none', 'stroke:none');
-  else if (n.fill && n.fill !== '#ffffff') parts.push('fill:' + n.fill, 'stroke:#333');
-  if (n.fontSize && n.fontSize !== DEFAULT_FONT_SIZE) parts.push('font-size:' + n.fontSize + 'px');
-  if (n.bold) parts.push('font-weight:bold');
+  else {
+    const fill = n.fill || '#ffffff';
+    if (fill !== (base.fill || '#ffffff')) parts.push('fill:' + fill);
+    const stroke = n.stroke || (fill !== '#ffffff' && !base.stroke ? '#333' : null);
+    if (stroke && stroke !== base.stroke) parts.push('stroke:' + stroke);
+  }
+  if (n.strokeWidth && n.strokeWidth !== base.strokeWidth) parts.push('stroke-width:' + n.strokeWidth + 'px');
+  if (!!n.dash !== !!base.dash) parts.push('stroke-dasharray:' + (n.dash ? '5 4' : '0'));
+  if (n.color && n.color !== base.color) parts.push('color:' + n.color);
+  if (n.fontSize && n.fontSize !== (base.fontSize || DEFAULT_FONT_SIZE)) parts.push('font-size:' + n.fontSize + 'px');
+  if (!!n.bold !== !!base.bold) parts.push('font-weight:' + (n.bold ? 'bold' : 'normal'));
   return parts.length ? 'style ' + n.id + ' ' + parts.join(',') : null;
 }
 
@@ -397,7 +474,15 @@ function toMermaid(d) {
   const lines = ['flowchart ' + direction];
   // A title read from front matter goes back the same way; the canvas has no
   // place for one, but it mustn't be lost on a round trip.
-  if (d.title) lines.unshift('---', 'title: ' + JSON.stringify(d.title), '---');
+  // So does the rest of the front matter (a theme, a layout engine), and an
+  // `%%{init}%%` directive; the writer's own comments are remade, others kept.
+  const kept = d.kept || {};
+  for (const l of kept.comments || []) lines.push('  ' + l);
+  for (const l of kept.acc || []) lines.push('  ' + l);
+  lines.unshift(...(kept.init || []));
+  if (d.title || (kept.front || []).length) {
+    lines.unshift('---', ...(d.title ? ['title: ' + JSON.stringify(d.title)] : []), ...(kept.front || []), '---');
+  }
 
   // Groups and loose blocks are declared in reading order, and so are the
   // blocks inside each group. Nodes are declared inside their subgraph rather
@@ -432,18 +517,38 @@ function toMermaid(d) {
   const rank = new Map(order.map((n, i) => [n.id, i]));
   const edges = d.edges.slice().sort((p, q) => rank.get(p.from) - rank.get(q.from) || rank.get(p.to) - rank.get(q.to));
   for (const e of edges) lines.push('  ' + edgeDecl(e));
+  // Classes as written: their names say what the blocks have in common
+  // ("external", "datastore"), which a style per block would lose.
+  const used = [];
+  for (const n of order) for (const c of n.classes || []) if (!used.includes(c) && (d.classDefs || {})[c]) used.push(c);
+  if ((d.classDefs || {}).default) lines.push('  classDef default ' + d.classDefs.default);
+  for (const c of used) {
+    lines.push('  classDef ' + c + ' ' + d.classDefs[c]);
+    lines.push('  class ' + order.filter((n) => (n.classes || []).includes(c)).map((n) => n.id).join(',') + ' ' + c);
+  }
   for (const n of order) {
-    const s = !n.members && styleDecl(n);
+    const s = !n.members && styleDecl(n, d);
     if (s) lines.push('  ' + s);
   }
-  // A group's title size, as a standard `style` on the subgraph.
+  // A group's colours and title size, as a standard `style` on the subgraph.
   for (const g of d.groups) {
-    if (g.fontSize && g.fontSize !== GROUP_FONT_SIZE) lines.push('  style ' + g.id + ' font-size:' + g.fontSize + 'px');
+    const parts = [];
+    if (g.fill) parts.push('fill:' + g.fill);
+    if (g.stroke) parts.push('stroke:' + g.stroke);
+    if (g.color) parts.push('color:' + g.color);
+    if (g.fontSize && g.fontSize !== GROUP_FONT_SIZE) parts.push('font-size:' + g.fontSize + 'px');
+    if (parts.length && hasBlocks(g)) lines.push('  style ' + g.id + ' ' + parts.join(','));
   }
-  edges.forEach((e, i) => {
-    const s = linkStyleDecl(e, i);
-    if (s) lines.push('  ' + s);
-  });
+  // Interactions and accessibility text, for blocks that still exist.
+  for (const l of (d.kept || {}).after || []) {
+    const id = (l.match(/^click\s+([\p{L}\p{N}_-]+)/u) || [])[1];
+    if (!id || nodeById(d, id)) lines.push('  ' + l);
+  }
+  // One `linkStyle default` when every connector is styled alike.
+  const linkDecls = edges.map((e, i) => linkStyleDecl(e, i));
+  const bodies = linkDecls.map((s) => s && s.replace(/^linkStyle \d+ /, ''));
+  if (edges.length > 1 && bodies[0] && bodies.every((b) => b === bodies[0])) lines.push('  linkStyle default ' + bodies[0]);
+  else linkDecls.forEach((s) => { if (s) lines.push('  ' + s); });
 
   // Only nodes are recorded. A group's box is always derived from its members,
   // so storing it would just be data that can go stale. These lines keep the
@@ -530,10 +635,16 @@ const BRACKETS = [
 const LINK_RE = /^\s*(?:[\p{L}\p{N}_]+@)?(~{3,}|[<ox]?(?:-\.+-|-{2,}|={2,})[>ox]?)\s*(?:\|\s*("[^"]*"|[^|]*?)\s*\|\s*)?/u;
 
 function linkFromToken(token) {
+  const end = /[ox]$/.test(token) ? token.slice(-1) : /^[ox]/.test(token) ? token[0] : null;
+  const head = /^[<ox]/.test(token) && /[>ox]$/.test(token) ? 'both' : /^[<ox]|[>ox]$/.test(token) ? 'end' : 'none';
+  // How much longer than the shortest link of its kind: `--->` is 2.
+  const body = token.replace(/^[<ox]|[>ox]$/g, '');
+  const length = body.includes('.') ? body.split('.').length - 1 : body.length - (head === 'none' ? 2 : 1);
   return {
     dash: token.includes('.') ? 'dotted' : 'solid',
-    // Circle and cross heads are drawn as arrows: the direction is what matters.
-    head: /^[<ox]/.test(token) && /[>ox]$/.test(token) ? 'both' : /^[<ox]|[>ox]$/.test(token) ? 'end' : 'none',
+    head,
+    mark: end === 'o' ? 'circle' : end === 'x' ? 'cross' : null,
+    length: length > 1 ? length : 0,
     width: token.includes('=') ? 3.5 : DEFAULT_EDGE_W,
   };
 }
@@ -935,6 +1046,9 @@ function parseMermaid(text) {
   const classOf = {};     // node id -> class names, in the order given
   const edgeIds = new Set();
   const oldJunctions = new Set();
+  const kept = { front: [], init: [], comments: [], acc: [], after: [] };
+  let inLayout = false;
+  d.kept = kept;
   let groupStack = [];
   let sawHeader = false;
   const invisible = [];   // `A ~~~ B`: [from, to], for the layout only
@@ -970,6 +1084,7 @@ function parseMermaid(text) {
     if (close === -1) throw new Error('front matter opened with --- is never closed');
     const title = lines.slice(1, close).map((l) => l.match(/^\s*title:\s*(.*?)\s*$/)).find(Boolean);
     if (title && title[1]) d.title = title[1].replace(/^(["'])(.*)\1$/, '$2');
+    kept.front = lines.slice(1, close).filter((l) => l.trim() && !/^\s*title:/.test(l));
     lines = lines.slice(close + 1);
   }
   // `;` ends a statement just as a newline does (`flowchart LR; A-->B;`), so
@@ -1007,6 +1122,12 @@ function parseMermaid(text) {
     // dot; their symbol comment says which ones were junctions.
     if (line.startsWith('%%')) {
       for (const m of line.matchAll(/([\p{L}\p{N}_-]+) is a wire junction/gu)) oldJunctions.add(m[1]);
+      if (line.startsWith('%%{')) kept.init.push(line);
+      // A comment of the writer's own (the symbol key) is remade on writing.
+      else if (line !== LAYOUT_HEADER && !/^%% [\p{L}\p{N}_-]+ is a (buffer\/driver|delay element|queue\/FIFO|summing junction|wire junction|bus bar)\b/u.test(line)) {
+        if (!inLayout) kept.comments.push(line);
+      }
+      if (line === LAYOUT_HEADER) inLayout = true;
       continue;
     }
 
@@ -1040,8 +1161,8 @@ function parseMermaid(text) {
     // Consumed whatever it says, including `linkStyle default ...`, which
     // names no particular edge but must not be read as a block.
     if (/^linkStyle\b/.test(line)) {
-      const ls = line.match(/^linkStyle\s+([\d,\s]+?)\s+(.*)$/);
-      if (ls) ls[1].split(',').forEach((i) => { linkStyles[+i.trim()] = ls[2]; });
+      const ls = line.match(/^linkStyle\s+([\d,\s]+?|default)\s+(.*)$/);
+      if (ls) ls[1].split(',').forEach((i) => { linkStyles[i.trim() === 'default' ? 'default' : +i.trim()] = ls[2]; });
       continue;
     }
 
@@ -1058,7 +1179,9 @@ function parseMermaid(text) {
       for (const id of classLine[1].split(',')) (classOf[id.trim()] = classOf[id.trim()] || []).push(classLine[2]);
       continue;
     }
-    if (/^(classDef|class|click|accTitle|accDescr)\b/.test(line)) continue;
+    if (/^click\b/.test(line)) { kept.after.push(line); continue; }
+    if (/^(accTitle|accDescr)\b/.test(line)) { kept.acc.push(line); continue; }
+    if (/^(classDef|class)\b/.test(line)) continue;
     // `e1@{ animate: true }` styles the link named e1: nothing to draw.
     const named = line.match(/^([\p{L}\p{N}_]+)@\{/u);
     if (named && edgeIds.has(named[1])) continue;
@@ -1111,22 +1234,27 @@ function parseMermaid(text) {
     // the winner goes first, where the first match below finds it.
     const decl = [styles[n.id]].concat((classOf[n.id] || []).map((c) => classDefs[c]).reverse(), classDefs.default)
       .filter(Boolean).join(',');
-    if (/fill:\s*none/.test(decl) && /stroke:\s*none/.test(decl)) n.shape = 'text';
-    const fill = decl.match(/fill:\s*(#[0-9a-fA-F]{3,8})/);
-    if (fill) n.fill = fill[1];
-    const size = decl.match(/font-size:\s*([\d.]+)/);
-    if (size) n.fontSize = +size[1];
-    if (/font-weight:\s*(bold|[6-9]00)/.test(decl)) n.bold = true;
+    const look = readLook(decl);
+    if (look.fill === 'none' && look.stroke === 'none') n.shape = 'text';
+    else {
+      if (look.fill && look.fill !== 'none') n.fill = look.fill;
+      if (look.stroke && look.stroke !== 'none') n.stroke = look.stroke;
+    }
+    if (look.strokeWidth) n.strokeWidth = look.strokeWidth;
+    if (look.dash) n.dash = true;
+    if (look.color) n.color = look.color;
+    if (look.fontSize) n.fontSize = look.fontSize;
+    if (look.bold) n.bold = true;
+    if (classOf[n.id]) n.classes = classOf[n.id].filter((c, k, all) => all.indexOf(c) === k);
   }
   d.edges.forEach((e, i) => {
-    const decl = linkStyles[i] || '';
-    const w = decl.match(/stroke-width:\s*([\d.]+)/);
-    if (w) e.width = +w[1];
-    const color = decl.match(/(?:^|,)\s*stroke:\s*(#[0-9a-fA-F]{3,8})/);
-    if (color) e.color = color[1];
-    const size = decl.match(/font-size:\s*([\d.]+)/);
-    if (size) e.fontSize = +size[1];
-    if (/font-weight:\s*(bold|[6-9]00)/.test(decl)) e.bold = true;
+    // A connector's own linkStyle first, then `linkStyle default`.
+    const look = readLook([linkStyles[i], linkStyles.default].filter(Boolean).join(','));
+    if (look.strokeWidth) e.width = look.strokeWidth;
+    if (look.stroke && look.stroke !== 'none') e.color = look.stroke;
+    if (look.dash) e.dash = 'dotted';
+    if (look.fontSize) e.fontSize = look.fontSize;
+    if (look.bold) e.bold = true;
     if (anchors[i]) { e.fromAnchor = anchors[i][0]; e.toAnchor = anchors[i][1]; }
     if (paths[i]) e.points = paths[i];
     if (routes[i]) e.route = routes[i];
@@ -1143,9 +1271,13 @@ function parseMermaid(text) {
   }
 
   for (const g of d.groups) {
-    const size = (styles[g.id] || '').match(/font-size:\s*([\d.]+)/);
-    if (size) g.fontSize = +size[1];
+    const look = readLook(styles[g.id]);
+    if (look.fontSize) g.fontSize = look.fontSize;
+    if (look.fill && look.fill !== 'none') g.fill = look.fill;
+    if (look.stroke && look.stroke !== 'none') g.stroke = look.stroke;
+    if (look.color) g.color = look.color;
   }
+  d.classDefs = classDefs;
 
   // `B --> G` with G a subgraph connects to the whole group, as in Mermaid:
   // the reference made a block named G, which goes again.

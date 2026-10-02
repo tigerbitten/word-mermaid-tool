@@ -453,16 +453,25 @@ function labelText(parent, lines, cx, cy, size, bold, cls, defaultSize) {
 
 function drawNode(parent, n) {
   const g = el('g', { 'data-id': n.id, 'data-kind': 'node' }, parent);
+  const solid = /wm-solid/;
   for (const shape of shapeElement(n)) {
     if (shape.getAttribute('data-line')) shape.style.fill = 'none';
-    else if (n.fill && n.fill !== '#ffffff') shape.style.fill = n.fill;
+    else if (n.fill && n.fill !== '#ffffff' && !solid.test(shape.getAttribute('class'))) shape.style.fill = n.fill;
+    // Border colour, width and dashes from the Mermaid style, where it set them.
+    if (!/wm-bare/.test(shape.getAttribute('class'))) {
+      if (n.stroke) shape.style.stroke = n.stroke;
+      if (n.strokeWidth) shape.style.strokeWidth = n.strokeWidth;
+      if (n.dash) shape.style.strokeDasharray = '5 4';
+    }
+    if (n.stroke && solid.test(shape.getAttribute('class'))) shape.style.fill = n.stroke;
     g.appendChild(shape);
   }
   if (LABELLESS.has(n.shape)) return g;
   const size = n.fontSize || DEFAULT_FONT_SIZE;
   const area = labelArea(n);
   const lines = wrapLabel(n.label, area.w - LABEL_PAD_X * 2, size, n.bold);
-  labelText(g, lines, area.x + area.w / 2, area.y + area.h / 2, size, n.bold, 'wm-label', DEFAULT_FONT_SIZE);
+  const text = labelText(g, lines, area.x + area.w / 2, area.y + area.h / 2, size, n.bold, 'wm-label', DEFAULT_FONT_SIZE);
+  if (n.color) text.style.fill = n.color;
   return g;
 }
 
@@ -470,11 +479,14 @@ function drawNode(parent, n) {
 // can't see is a group you think didn't happen.
 function drawGroup(parent, g) {
   const node = el('g', { 'data-id': g.id, 'data-kind': 'group' }, parent);
-  el('rect', { x: g.x, y: g.y, width: g.w, height: g.h, rx: 8, class: 'wm-group' }, node);
+  const box = el('rect', { x: g.x, y: g.y, width: g.w, height: g.h, rx: 8, class: 'wm-group' }, node);
   const size = g.fontSize || GROUP_FONT_SIZE;
-  el('rect', { x: g.x, y: g.y, width: groupTabWidth(g), height: groupTitleH(g), rx: 6, class: 'wm-group-tab' }, node);
+  const tab = el('rect', { x: g.x, y: g.y, width: groupTabWidth(g), height: groupTitleH(g), rx: 6, class: 'wm-group-tab' }, node);
   const title = el('text', { x: g.x + size * 0.8, y: g.y + groupTitleH(g) / 2, class: 'wm-group-title' }, node);
   if (size !== GROUP_FONT_SIZE) title.style.fontSize = size + 'px';
+  // A subgraph's own colours: its fill, and its border carried into the tab.
+  if (g.fill) box.style.fill = g.fill;
+  if (g.stroke) { box.style.stroke = g.stroke; tab.style.fill = g.stroke; }
   title.textContent = g.label;
   return node;
 }
@@ -1170,9 +1182,11 @@ function drawEdge(parent, e, pts, index) {
   const endHead = e.head === 'end' || e.head === 'both';
   const startHead = e.head === 'both';
 
+  // A circle end is an open ring the line stops at; a cross sits on the line.
+  const trim = e.mark === 'circle' ? half * 2 : e.mark === 'cross' ? 0 : len - 1;
   let linePts = pts;
-  if (endHead) linePts = trimEnd(linePts, len - 1);
-  if (startHead) linePts = trimEnd(linePts.slice().reverse(), len - 1).reverse();
+  if (endHead) linePts = trimEnd(linePts, trim);
+  if (startHead) linePts = trimEnd(linePts.slice().reverse(), trim).reverse();
 
   const path = el('path', {
     d: roundedPathD(linePts, CORNER_R),
@@ -1181,11 +1195,30 @@ function drawEdge(parent, e, pts, index) {
   if (w !== DEFAULT_EDGE_W) path.style.strokeWidth = w;
   if (e.color) path.style.stroke = e.color;
 
-  const heads = [];
-  if (endHead) heads.push(arrowHeadD(pts[pts.length - 1], pts[pts.length - 2], len, half));
-  if (startHead) heads.push(arrowHeadD(pts[0], pts[1], len, half));
-  for (const d of heads) {
-    const head = el('path', { d, class: 'wm-arrow' }, g);
+  const ends = [];
+  if (endHead) ends.push([pts[pts.length - 1], pts[pts.length - 2]]);
+  if (startHead) ends.push([pts[0], pts[1]]);
+  for (const [tip, from] of ends) {
+    const dist = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
+    const ux = (tip.x - from.x) / dist;
+    const uy = (tip.y - from.y) / dist;
+    let head;
+    if (e.mark === 'circle') {
+      head = el('ellipse', { cx: tip.x - ux * half, cy: tip.y - uy * half, rx: half, ry: half, class: 'wm-edge' }, g);
+      head.style.fill = '#ffffff';
+      if (e.color) head.style.stroke = e.color;
+      if (w !== DEFAULT_EDGE_W) head.style.strokeWidth = w;
+      continue;
+    }
+    if (e.mark === 'cross') {
+      const c = { x: tip.x - ux * half * 1.6, y: tip.y - uy * half * 1.6 };
+      const k = half * 0.9;
+      head = el('path', { d: `M${c.x - k} ${c.y - k}L${c.x + k} ${c.y + k}M${c.x + k} ${c.y - k}L${c.x - k} ${c.y + k}`, class: 'wm-edge' }, g);
+      if (e.color) head.style.stroke = e.color;
+      if (w !== DEFAULT_EDGE_W) head.style.strokeWidth = w;
+      continue;
+    }
+    head = el('path', { d: arrowHeadD(tip, from, len, half), class: 'wm-arrow' }, g);
     if (e.color) head.style.fill = e.color;
   }
 
