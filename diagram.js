@@ -221,7 +221,9 @@ const RESERVED_IDS = new Set(['end', 'subgraph', 'graph', 'flowchart', 'style', 
 // and then frozen -- renaming a node must not churn every edge that refers to
 // it, and must not break the saved text.
 function makeId(label, taken) {
-  let base = String(label || '').replace(/[^\p{L}\p{N}_]/gu, '');
+  // ASCII only: Mermaid trips over some non-ASCII ids (`Q漢end`). A pasted
+  // unicode id is kept as written; only made-up ones are plain.
+  let base = String(label || '').normalize('NFD').replace(/[^A-Za-z0-9_]/g, '');
   if (!base || /^[0-9]/.test(base) || RESERVED_IDS.has(base.toLowerCase())) base = 'n' + base;
   base = base.slice(0, 24);
   let id = base;
@@ -241,7 +243,11 @@ function quoteLabel(text) {
     .replace(/"/g, '#quot;')
     .replace(/<(?=[A-Za-z/!])/g, '#lt;')
     .replace(/\r?\n/g, '<br/>')
-    .replace(/^`(?=[\s\S]*`$)/, '#96;');
+    // Mermaid reads a label opening with a backtick as markdown, `%%{` as a
+    // directive, and decodes &name; -- each written so it stays as typed.
+    .replace(/^`/, '#96;')
+    .replace(/%%/g, '%#37;')
+    .replace(/&(?=#?\w+;)/g, '#38;');
   return '"' + escaped + '"';
 }
 
@@ -322,6 +328,12 @@ function readLook(decl) {
   return look;
 }
 
+// Inside `@{ ... }` a label is a YAML string, where a backslash escapes: it
+// is written as Mermaid's entity code instead. Empty is a blank, as above.
+function yamlLabel(label) {
+  return quoteLabel(label || ' ').replace(/\\/g, '#92;');
+}
+
 function nodeDecl(n) {
   const s = SHAPES[n.shape] || SHAPES.rect;
   // A single space, not "": Mermaid shows a node's id in place of an empty
@@ -331,12 +343,13 @@ function nodeDecl(n) {
   const ph = Math.round(Math.max(16, n.h - (n.label ? 23 : 0)));
   const extra = (n.mediaExtra ? ', ' + n.mediaExtra : '') +
     (n.mediaSized ? (n.shape === 'image' ? ', w: ' + Math.round(n.w) : '') + ', h: ' + (n.shape === 'image' ? ph : Math.round(Math.min(n.w, ph))) : '');
-  if (n.shape === 'icon') return n.id + '@{ icon: ' + JSON.stringify(n.icon || '') + (n.form ? ', form: ' + JSON.stringify(n.form) : '') + ', label: ' + quoteLabel(n.label) + extra + ' }';
-  if (n.shape === 'image') return n.id + '@{ img: ' + JSON.stringify(n.img || '') + ', label: ' + quoteLabel(n.label) + extra + ' }';
+  if (n.shape === 'icon') return n.id + '@{ icon: ' + JSON.stringify(n.icon || '') + (n.form ? ', form: ' + JSON.stringify(n.form) : '') + ', label: ' + yamlLabel(n.label) + extra + ' }';
+  if (n.shape === 'image') return n.id + '@{ img: ' + JSON.stringify(n.img || '') + ', label: ' + yamlLabel(n.label) + extra + ' }';
   if (s.v11) {
-    return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) && !n.label ? '' : ', label: ' + quoteLabel(n.label)) + ' }';
+    return n.id + '@{ shape: ' + s.v11 + (LABELLESS.has(n.shape) && !n.label ? '' : ', label: ' + yamlLabel(n.label)) + ' }';
   }
-  return n.id + s.open + quoteLabel(n.label) + s.close;
+  // Mermaid refuses an empty label (`A[""]`); a blank one reads back as empty.
+  return n.id + s.open + quoteLabel(n.label || ' ') + s.close;
 }
 
 // Dash and arrowheads map straight onto Mermaid's link syntax. A heavy edge is
@@ -371,8 +384,16 @@ function edgeDecl(e) {
 // What the block's look adds to its classes', as a `style` line. A fill is
 // written with a dark border, as the canvas draws it: Mermaid's own default
 // border is lilac.
+// A class's declaration, if it is one Mermaid can read and so gets written
+// back. A stray character typed into one would break the whole text; then
+// it's left out, and the blocks' own style lines carry its look.
+function classDefOf(d, c) {
+  const decl = (d.classDefs || {})[c];
+  return decl && /^[\w\s:#%(),.\-!;\/]*$/.test(decl) ? decl : null;
+}
+
 function styleDecl(n, d) {
-  const base = readLook([].concat((n.classes || []).map((c) => (d.classDefs || {})[c]).reverse(), (d.classDefs || {}).default).filter(Boolean).join(','));
+  const base = readLook([].concat((n.classes || []).map((c) => classDefOf(d, c)).reverse(), classDefOf(d, 'default')).filter(Boolean).join(','));
   const parts = [];
   if (n.shape === 'text') parts.push('fill:none', 'stroke:none');
   else {
@@ -443,7 +464,8 @@ function flowDirection(d) {
   for (const e of d.edges) {
     const a = endOf(d, e.from);
     const b = endOf(d, e.to);
-    if (!a || !b || a === b) continue;
+    // A loose line end says nothing about which way the diagram flows.
+    if (!a || !b || a === b || isPoint(a) || isPoint(b)) continue;
     const own = ownDirection(e.from);
     if (own && own === ownDirection(e.to)) continue;
     const dx = cx(b) - cx(a);
@@ -485,14 +507,27 @@ function readingOrder(items, direction) {
   const back = direction === 'RL' || direction === 'BT' ? -1 : 1;
   const [along, side] = across ? ['x', 'y'] : ['y', 'x'];
   const within = (across ? DEFAULT_W : DEFAULT_H) / 2;
-  const sorted = items.slice().sort((p, q) => back * (p[along] - q[along]) || p[side] - q[side]);
+  // Ties broken by id, so the same drawing always writes the same text.
+  const byId = (p, q) => (p.id < q.id ? -1 : p.id > q.id ? 1 : 0);
+  // On whole pixels, as the layout lines store them: a fraction would order
+  // two blocks one way now and the other way once read back.
+  const at = (it, k) => Math.round(it[k]);
+  const sorted = items.slice().sort((p, q) => back * (at(p, along) - at(q, along)) || at(p, side) - at(q, side) || byId(p, q));
   const runs = [];
   for (const it of sorted) {
     const run = runs[runs.length - 1];
-    if (run && Math.abs(it[along] - run[0][along]) < within) run.push(it);
+    if (run && Math.abs(at(it, along) - at(run[0], along)) < within) run.push(it);
     else runs.push([it]);
   }
-  return runs.flatMap((run) => run.sort((p, q) => p[side] - q[side]));
+  return runs.flatMap((run) => run.sort((p, q) => at(p, side) - at(q, side) || byId(p, q)));
+}
+
+// Connectors grouped by the block they leave, in declaration order. An end
+// not declared (a group with no blocks) goes last rather than poisoning the sort.
+function edgeOrder(d, order) {
+  const rank = new Map(order.map((n, i) => [n.id, i]));
+  const r = (id) => (rank.has(id) ? rank.get(id) : order.length);
+  return d.edges.slice().sort((p, q) => r(p.from) - r(q.from) || r(p.to) - r(q.to));
 }
 
 function toMermaid(d) {
@@ -524,7 +559,7 @@ function toMermaid(d) {
     for (const it of readingOrder(items, direction)) {
       order.push(it);
       if (!it.members) { lines.push(pad + nodeDecl(it)); continue; }
-      lines.push(pad + 'subgraph ' + it.id + '[' + quoteLabel(it.label) + ']');
+      lines.push(pad + 'subgraph ' + it.id + '[' + quoteLabel(it.label || ' ') + ']');
       if (it.direction) lines.push(pad + '  direction ' + it.direction);
       declare(it.members.map((id) => nodeById(d, id)).filter(Boolean)
         .concat(childGroups(d, it).filter(hasBlocks)), pad + '  ');
@@ -537,7 +572,7 @@ function toMermaid(d) {
   if (symbols.length) lines.splice(lines.indexOf('flowchart ' + direction) + 1, 0, '  %% ' + symbols.join('; '));
   // Named pins, which Mermaid has no syntax for, said in a comment an LLM
   // reads as written: `RF.rs1 --> ALU.a` is RF's pin rs1 wired to ALU's pin a.
-  const pinned = d.edges.filter((e) => e.fromPort || e.toPort)
+  const pinned = edgeOrder(d, order).filter((e) => e.fromPort || e.toPort)
     .map((e) => e.from + (e.fromPort ? '.' + e.fromPort : '') + ' --> ' + e.to + (e.toPort ? '.' + e.toPort : '')).map((t) => t.replace(/\s*\n\s*/g, ' '));
   if (pinned.length) lines.splice(lines.indexOf('flowchart ' + direction) + 1, 0, '  %% ports: ' + pinned.join('; '));
 
@@ -545,15 +580,14 @@ function toMermaid(d) {
   // text reads as the flow does. Everything that refers to a connector by
   // number (linkStyle, and the %% link / path / route lines) numbers it by
   // this order, since that is the order they're read back in.
-  const rank = new Map(order.map((n, i) => [n.id, i]));
-  const edges = d.edges.slice().sort((p, q) => rank.get(p.from) - rank.get(q.from) || rank.get(p.to) - rank.get(q.to));
+  const edges = edgeOrder(d, order);
   for (const e of edges) lines.push('  ' + edgeDecl(e));
   // Classes as written: their names say what the blocks have in common
   // ("external", "datastore"), which a style per block would lose.
   const used = [];
-  for (const n of order) for (const c of n.classes || []) if (!used.includes(c) && (d.classDefs || {})[c]) used.push(c);
+  for (const n of order) for (const c of n.classes || []) if (!used.includes(c) && classDefOf(d, c)) used.push(c);
   // `order` holds the groups too (with blocks), so a class on a subgraph is written the same way.
-  if ((d.classDefs || {}).default) lines.push('  classDef default ' + d.classDefs.default);
+  if (classDefOf(d, 'default')) lines.push('  classDef default ' + d.classDefs.default);
   for (const c of used) {
     lines.push('  classDef ' + c + ' ' + d.classDefs[c]);
     lines.push('  class ' + order.filter((n) => (n.classes || []).includes(c)).map((n) => n.id).join(',') + ' ' + c);
@@ -563,8 +597,8 @@ function toMermaid(d) {
     if (s) lines.push('  ' + s);
   }
   // A group's colours and title size, as a standard `style` on the subgraph.
-  for (const g of d.groups) {
-    const base = readLook((g.classes || []).map((c) => (d.classDefs || {})[c]).reverse().filter(Boolean).join(','));
+  for (const g of order.filter((it) => it.members)) {
+    const base = readLook((g.classes || []).map((c) => classDefOf(d, c)).reverse().filter(Boolean).join(','));
     const parts = [];
     if (g.fill && g.fill !== base.fill) parts.push('fill:' + g.fill);
     if (g.stroke && g.stroke !== base.stroke) parts.push('stroke:' + g.stroke);
@@ -746,7 +780,7 @@ function readNodeRef(s, i) {
     if (media && media.sized) media.size = { w: parseFloat(props.w) || null, h: parseFloat(props.h) || null };
     if (media) media.extra = ['pos', 'constraint'].filter((k) => props[k] != null).map((k) => k + ': ' + props[k]).join(', ') || null;
     return Object.assign({ id, shape: props.shape ? SHAPE_BY_V11[props.shape] || 'rect' : null,
-             label: props.label != null ? unquoteLabel(props.label) : null, next: end.next, cls: end.cls }, media);
+             label: props.label != null ? (unquoteLabel(props.label) === ' ' ? '' : unquoteLabel(props.label)) : null, next: end.next, cls: end.cls }, media);
   }
 
   for (const [open, close, shape] of BRACKETS) {
@@ -757,7 +791,7 @@ function readNodeRef(s, i) {
     const end = s.indexOf(close, from);
     if (end === -1) continue;
     const md = markdownLabel(s.slice(i + open.length, end));
-    return Object.assign({ id, shape, label: md.label, bold: md.bold }, readClass(s, end + close.length));
+    return Object.assign({ id, shape, label: md.label === ' ' ? '' : md.label, bold: md.bold }, readClass(s, end + close.length));
   }
   return Object.assign({ id, shape: null, label: null }, readClass(s, i));
 }
@@ -1110,6 +1144,7 @@ function parseMermaid(text) {
   }
   const d = newDiagram();
   const layout = {};
+  const layoutOrder = [];   // the ids of the layout lines, in order: stacking order
   const anchors = {};
   const paths = {};
   const routes = {};
@@ -1134,6 +1169,8 @@ function parseMermaid(text) {
     if (!n) {
       const shape = ref.shape || 'rect';
       const [w, h] = defaultSize(shape);
+      // A label of only spaces is an empty one (an empty one is written " ").
+      if (ref.label != null && !ref.label.trim()) ref.label = '';
       n = { id: ref.id, label: ref.label != null ? ref.label : (LABELLESS.has(shape) || ref.icon || ref.img ? '' : ref.id),
             shape, x: 0, y: 0, w, h, fill: '#ffffff', fontSize: DEFAULT_FONT_SIZE, bold: !!ref.bold };
       if (ref.icon) { n.icon = ref.icon; if (ref.form) n.form = ref.form; }
@@ -1150,7 +1187,7 @@ function parseMermaid(text) {
       d.nodes.push(n);
       if (groupStack.length) groupStack[groupStack.length - 1].members.push(n.id);
     } else {
-      if (ref.label != null) n.label = ref.label;
+      if (ref.label != null) n.label = ref.label.trim() ? ref.label : '';
       if (ref.shape) n.shape = ref.shape;
       if (ref.icon) { n.icon = ref.icon; n.form = ref.form || null; }
       if (ref.img) n.img = ref.img;
@@ -1192,6 +1229,7 @@ function parseMermaid(text) {
 
     const layoutMatch = line.match(/^%%\s+([\p{L}\p{N}_-]+)\s+(-?\d+),(-?\d+)\s+(\d+)x(\d+)(?:\s+r(90|180|270))?\s*$/u);
     if (layoutMatch) {
+      layoutOrder.push(layoutMatch[1]);
       layout[layoutMatch[1]] = {
         x: +layoutMatch[2], y: +layoutMatch[3], w: +layoutMatch[4], h: +layoutMatch[5],
       };
@@ -1243,7 +1281,8 @@ function parseMermaid(text) {
     // parse the keyword itself as a block called "subgraph".
     if (/^subgraph\b/.test(line)) {
       const sub = line.match(/^subgraph\s+([\p{L}\p{N}_-]+)\s*(?:\[(.*)\])?\s*$/u);
-      const label = markdownLabel(sub ? (sub[2] ? sub[2] : sub[1]) : line.slice(9).trim()).label;
+      const read = markdownLabel(sub ? (sub[2] ? sub[2] : sub[1]) : line.slice(9).trim()).label;
+      const label = read.trim() ? read : '';
       const id = sub ? sub[1] : makeId(label, new Set(d.groups.map((g) => g.id)));
       const g = { id, label, members: [], parent: groupStack.length ? groupStack[groupStack.length - 1].id : null,
                   x: 0, y: 0, w: 0, h: 0 };
@@ -1278,9 +1317,16 @@ function parseMermaid(text) {
       for (const id of classLine[1].split(',')) (classOf[id.trim()] = classOf[id.trim()] || []).push(classLine[2]);
       continue;
     }
-    if (/^click\b/.test(line)) { kept.after.push(line); continue; }
+    // Kept only in a form Mermaid accepts: a link (`click A "url" "tip" _blank`)
+    // or a callback (`click A call fn()`, `click A fn`). Anything else would
+    // make the whole alt text unreadable to Mermaid.
+    if (/^click\b/.test(line)) {
+      if (/^click\s+[\p{L}\p{N}_-]+\s+(?:(?:href\s+)?"[^"]*"(?:\s+"[^"]*")?(?:\s+_(?:blank|self|parent|top))?|call\s+\w+\([^)]*\)(?:\s+"[^"]*")?|\w+(?:\s+"[^"]*")?)\s*$/u.test(line)) kept.after.push(line);
+      continue;
+    }
     if (/^(accTitle|accDescr)\b/.test(line)) { kept.acc.push(line); continue; }
-    if (/^(classDef|class)\b/.test(line)) continue;
+    // A keyword line that didn't match its form above is not a block called "style".
+    if (/^(classDef|class|style|linkStyle|click)\b/.test(line)) continue;
     // `e1@{ animate: true }` styles the link named e1: nothing to draw.
     const named = line.match(/^([\p{L}\p{N}_]+)@\{/u);
     if (named && edgeIds.has(named[1])) continue;
@@ -1372,7 +1418,8 @@ function parseMermaid(text) {
   // changes), but declarations come out grouped by subgraph. The layout lines
   // are written in the real order, so they put it back -- otherwise a block
   // brought to the front could sink behind others on the way through Word.
-  const order = Object.keys(layout);
+  // Not Object.keys: it lists number-like ids (`1`, `2`) first.
+  const order = layoutOrder;
   if (order.length) {
     const rank = (n) => { const r = order.indexOf(n.id); return r === -1 ? Infinity : r; };
     d.nodes.sort((p, q) => rank(p) - rank(q));
@@ -1419,8 +1466,12 @@ function parseMermaid(text) {
 function applyLayout(d, layout, invisible) {
   const unplaced = [];
   for (const n of d.nodes) {
+    // A zero size is a loose line end's; on anything else (the end turned
+    // into a block in the Mermaid tab) it would be an invisible block.
     const l = layout[n.id];
-    if (l) Object.assign(n, l); else unplaced.push(n);
+    // (A loose end is still an empty text node here: it becomes a point below.)
+    const loose = n.shape === 'text' && !String(n.label || '').trim();
+    if (l && (loose || isPoint(n) || (l.w > 0 && l.h > 0))) Object.assign(n, l); else unplaced.push(n);
   }
   // Sized to their text where text can be measured (render.js, in the pane;
   // not in `node test.js`, which keeps the default size).

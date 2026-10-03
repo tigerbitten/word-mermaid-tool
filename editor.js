@@ -531,6 +531,9 @@ function dropStrayPoints() {
 function commit() {
   dropStrayPoints();
   refitGroups();
+  // An action that changed nothing (centring centred text, a drag that ended
+  // where it began) leaves no undo step that would seem to do nothing.
+  if (undoStack.length && undoStack[undoStack.length - 1] === JSON.stringify(model)) undoStack.pop();
   // Once you've started editing, the view is yours: the pane resizing (the
   // status line wrapping onto a second line is enough) must not re-fit and
   // shift the whole diagram under the pointer.
@@ -1990,9 +1993,11 @@ function beginLabelEdit(item, seed, box, apply) {
       return;
     }
     const live = model.nodes.includes(item) || model.edges.includes(item) || model.groups.includes(item);
-    if (live && input.value !== item.label) {
+    // Only spaces is no text at all.
+    const value = input.value.trim() ? input.value : '';
+    if (live && value !== item.label) {
       pushUndo();
-      item.label = input.value;
+      item.label = value;
       if (item.shape) fitNodeSize(item);
       commit();
     }

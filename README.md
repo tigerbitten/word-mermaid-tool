@@ -21,7 +21,8 @@ Prototype. Word desktop on Windows and Mac.
 - **Select anything and a toolbar appears above it**, Miro-style: shape, fill
   (any colour), border (colour, thickness, dashed), turn 90°, text size, bold,
   italic, underline, text colour and alignment, grouping for blocks; a colour
-  for groups; line style, arrowheads, thickness,
+  for groups. Colours preview on the diagram as you rest on a swatch or drag
+  in the colour picker, and a pick is one undo step; line style, arrowheads, thickness,
   colour, label size, bold and reverse for connectors. **Right-click** for
   everything, including copy/paste style.
 - To rename a block: double-click it, press Enter or F2, or just select it and

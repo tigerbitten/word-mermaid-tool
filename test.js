@@ -7,8 +7,8 @@ const vm = require('vm');
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(__dirname + '/diagram.js', 'utf8') +
-  '\nthis.parseMermaid = parseMermaid; this.toMermaid = toMermaid; this.quoteLabel = quoteLabel; this.unquoteLabel = unquoteLabel;', ctx);
-const { parseMermaid, toMermaid, quoteLabel, unquoteLabel } = ctx;
+  '\nthis.parseMermaid = parseMermaid; this.toMermaid = toMermaid; this.quoteLabel = quoteLabel; this.unquoteLabel = unquoteLabel; this.makeId = makeId;', ctx);
+const { parseMermaid, toMermaid, quoteLabel, unquoteLabel, makeId } = ctx;
 
 let failed = 0;
 let out;
@@ -151,6 +151,24 @@ d.nodes[0].label = '`npm run`';
 check('a typed label in backticks stays as typed', parseMermaid(toMermaid(d)).nodes[0].label === '`npm run`', toMermaid(d).split('\n')[1]);
 d = parseMermaid('flowchart LR\n  A["Tom &amp; Jerry&nbsp;Co"] --> B');
 check('HTML entities decoded', d.nodes[0].label === 'Tom & Jerry\u00a0Co', d.nodes[0].label);
+
+d = parseMermaid('flowchart LR\n  point@{ shape: text, label: " " }\n  A --> point\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% A 0,0 140x56\n%% point 300,20 0x0');
+check('a loose line end stays a loose end', d.nodes[1].shape === 'point' && d.nodes[1].x === 300 && toMermaid(parseMermaid(toMermaid(d))) === toMermaid(d), d.nodes[1]);
+d = parseMermaid('flowchart LR\n  A --> point[Block]\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% A 0,0 140x56\n%% point 300,20 0x0');
+check('a loose end turned into a block gets a size', d.nodes[1].w > 0 && d.nodes[1].h > 0, d.nodes[1]);
+
+// Found by the UI fuzzer: labels typed in the editor that broke the alt text.
+for (const [label, shape] of [['', 'rect'], ['', 'parallelogram'], ['`x', 'rect'], ['a\\[', 'delay'], ['tail\\', 'delay'], ['[%%{a', 'rect'], ['a&amp;b', 'rect'], ['`npm`', 'cloud']]) {
+  d = parseMermaid('flowchart LR\n  A --> B');
+  Object.assign(d.nodes[0], { label, shape });
+  const back2 = parseMermaid(toMermaid(d)).nodes[0];
+  check('label ' + JSON.stringify(label) + ' on ' + shape + ' reads back as typed', back2.label === label && back2.shape === shape, [toMermaid(d).split('\n')[1], back2.label]);
+}
+check('made-up ids are plain ASCII', makeId('Q漢end', new Set()) === 'Qend' && makeId('béend', new Set()) === 'beend', [makeId('Q漢end', new Set()), makeId('béend', new Set())]);
+d = parseMermaid('flowchart LR\n  1 --> 2\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n%% 2 100,0 140x56\n%% 1 0,0 140x56');
+check('numeric ids keep their stacking order', ids(d) === '2,1', ids(d));
+d = parseMermaid('flowchart LR\n  A --> B\n  click A "https://x.y" "tip" _blank\n  click B - junk');
+check('a click line Mermaid would refuse is dropped, a good one kept', /click A "https:\/\/x.y" "tip" _blank/.test(toMermaid(d)) && !/click B/.test(toMermaid(d)), toMermaid(d));
 
 // Other diagram types, read as flowcharts.
 d = parseMermaid('stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy : go\n  state Busy {\n    [*] --> Work\n    Work --> [*]\n  }\n  Busy --> [*]\n  Idle : waiting');

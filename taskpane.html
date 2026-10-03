@@ -155,7 +155,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v29</span>
+    <span class="build">build v30</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -199,9 +199,9 @@
     <label id="svgOpt" title="Vector pictures: sharp at any zoom and in print. Word versions without SVG show the PNG kept inside. Untick for plain PNG pictures."><input type="checkbox" id="svgBox"> SVG</label>
   </div>
 
-<script src="diagram.js?v=29"></script>
-<script src="render.js?v=29"></script>
-<script src="editor.js?v=29"></script>
+<script src="diagram.js?v=30"></script>
+<script src="render.js?v=30"></script>
+<script src="editor.js?v=30"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -646,7 +646,8 @@
   function edgeControls(edge) {
     return [
       dropdown(DASHES, edge.dash, (v) => applyToEdge((e) => { e.dash = v; }), 'Line style'),
-      dropdown(HEADS, edge.head, (v) => applyToEdge((e) => { e.head = v; }), 'Arrowheads'),
+      // No arrowhead, no circle or cross end either.
+      dropdown(HEADS, edge.head, (v) => applyToEdge((e) => { e.head = v; if (v === 'none') e.mark = undefined; }), 'Arrowheads'),
       // The nearest entry: a pasted `==>` is 3.5, which no entry is exactly.
       dropdown(EDGE_WIDTHS, EDGE_WIDTHS.reduce((best, [w]) =>
         Math.abs(w - (edge.width || DEFAULT_EDGE_W)) < Math.abs(best - (edge.width || DEFAULT_EDGE_W)) ? w : best, EDGE_WIDTHS[0][0]),
@@ -941,6 +942,8 @@
     try { d = parseMermaid(src.value); }
     catch (e) { setStatus('could not parse that Mermaid: ' + e.message, 'error'); return false; }
     if (!d.nodes.length) { setStatus('no blocks found in that Mermaid -- canvas left alone', 'error'); return false; }
+    // Nothing changed: no reload, no undo step that would seem to do nothing.
+    if (toMermaid(d) === toMermaid(getModel())) { srcDirty = false; return true; }
     setModel(d);
     onModelChanged();
     fitView();

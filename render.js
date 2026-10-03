@@ -169,9 +169,10 @@ function fitNodeSize(n) {
 // The width is for the text: a diamond, whose text only has the middle half,
 // gets twice it, so it stays a diamond rather than a tall spike.
 function sizeForLabel(n) {
-  if (LABELLESS.has(n.shape) || !n.label) return;
+  if (LABELLESS.has(n.shape)) return;
   // A blank diamond or circle is a marker (a state diagram's choice): small.
-  if (!n.label.trim() && /diamond|circle/.test(n.shape)) { n.w = 40; n.h = 40; return; }
+  if (!String(n.label || '').trim() && /diamond|circle/.test(n.shape)) { n.w = 40; n.h = 40; return; }
+  if (!n.label) return;
   if (n.shape === 'icon' || n.shape === 'image') return;
   const one = textWidth(shownLabel(n), n.fontSize || DEFAULT_FONT_SIZE, n.bold);
   const textW = Math.min(240, one / 3 + LABEL_PAD_X * 2 + 20);
@@ -1056,7 +1057,23 @@ function selfLoopPoints(n, direction) {
 // missing). `raw` keeps every point including the two stub ends and collinear
 // runs -- the editor needs those to know which leg you grabbed. `from`/`to`
 // are the resolved ports, and `a0`/`b0` the stub ends a stored path hangs off.
+// Routing is the costly part of a redraw, and one frame asks for it several
+// times (drawing, hit-testing, the selected connector's handles). The last
+// answer is kept for as long as the diagram's content is the same.
+let routeMemo = { key: null, routes: null, labels: null };
+function memoFor(d) {
+  const key = JSON.stringify([d.direction, d.nodes, d.edges, d.groups]);
+  if (routeMemo.key !== key) routeMemo = { key, routes: null, labels: null };
+  return routeMemo;
+}
+
 function edgeRoutes(d) {
+  const memo = memoFor(d);
+  if (!memo.routes) memo.routes = routeAll(d);
+  return memo.routes;
+}
+
+function routeAll(d) {
   // What a connector must go round: drawn blocks, not loose line ends. And the
   // legs of the connectors routed so far, which the next one keeps off.
   const blocks = d.nodes.filter((n) => !isPoint(n) && n.w && n.h);
@@ -1327,7 +1344,12 @@ const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h
 // and off text already placed -- a label sitting on a crossing reads as
 // belonging to either line.
 function labelBoxes(d, geom) {
-  geom = geom || edgeGeometry(d);
+  const memo = memoFor(d);
+  if (!memo.labels) memo.labels = placeLabels(d, geom || edgeGeometry(d));
+  return memo.labels;
+}
+
+function placeLabels(d, geom) {
   const blocks = d.nodes.filter((n) => !isPoint(n) && n.w && n.h);
   const placed = [];
   return d.edges.map((e, i) => {
