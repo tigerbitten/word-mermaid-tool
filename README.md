@@ -109,10 +109,11 @@ Prototype. Word desktop on Windows and Mac.
   diagram you inserted or opened — no need to re-select it in the document.
   A picture you resized in Word keeps that scale when updated. A diagram
   you've set to wrap with text (in front of text, behind it, square...)
-  opens and updates too, keeping its wrapping and position; Word only lets an
-  add-in place such a picture as a PNG, so it's updated as a 400 ppi one.
-  Word 2019 / 2021 can open those but not update them -- set the picture to
-  In Line with Text first. **New** clears
+  opens and updates too: click it, Open, edit, Update -- it's replaced by a
+  vector picture with the same wrapping, position and rotation. Word 2019 /
+  2021 can open those but not update them in place -- set the picture to In
+  Line with Text first. If Open can't tell which floating picture you
+  clicked, the status line says what it saw. **New** clears
   the canvas for the next diagram (Ctrl+Z brings the last one back).
 - Pictures go in as SVG, sharp at any zoom and in print (Word 2016 and later;
   older Word shows the 400 ppi PNG kept inside). If Word refuses the SVG, the
