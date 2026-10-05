@@ -27,7 +27,6 @@ const EDITOR_STYLE = `
   .wm-droptarget { fill: none; stroke: #16a34a; }
   .wm-seghandle { fill: #fff; stroke: #2563eb; pointer-events: none; }
   .wm-group-sel { fill: none; stroke: #2563eb; }
-  .wm-group-join { fill: #16a34a; fill-opacity: 0.06; stroke: #16a34a; }
   .wm-member { fill: #2563eb; fill-opacity: 0.07; stroke: #2563eb; stroke-opacity: 0.55; }
   .wm-ghost { fill: #2563eb; fill-opacity: 0.06; stroke: #2563eb; stroke-dasharray: 4 3; }
   .wm-guide { fill: none; stroke: #e11d74; }
@@ -232,23 +231,16 @@ function drawChrome() {
   // Groups first, underneath everything else. A selected group -- or the
   // group of a selected block -- is outlined and its members tinted, so what
   // belongs to it is visible at a glance instead of being guesswork.
+  // Lit while a block is dragged too, so the group can be seen growing to
+  // keep it.
   const litGroups = new Set(model.groups.filter((g) => sel.has(g.id) ||
     g.members.some((m) => sel.has(m))));
-  if (drag && drag.mode === 'move') {
-    // While dragging, the group the blocks will land in lights up green.
-    const moving = new Set(drag.nodes.map((n) => n.id));
-    for (const g of model.groups) {
-      const joining = g.members.some((m) => moving.has(m)) && !g.members.every((m) => moving.has(m));
-      if (joining && g.w) outline({ ...g, rx: 8 }, 3 * s, 'wm-group-join', 2.5 * s);
-    }
-  } else {
-    for (const g of litGroups) {
-      if (!g.w) continue;
-      outline({ ...g, rx: 8 }, 2 * s, 'wm-group-sel', 2 * s);
-      for (const id of g.members) {
-        const m = nodeById(model, id);
-        if (m && !sel.has(m.id)) outline(m, 2 * s, 'wm-member', 1 * s);
-      }
+  for (const g of litGroups) {
+    if (!g.w) continue;
+    outline({ ...g, rx: 8 }, 2 * s, 'wm-group-sel', 2 * s);
+    for (const id of g.members) {
+      const m = nodeById(model, id);
+      if (m && !sel.has(m.id)) outline(m, 2 * s, 'wm-member', 1 * s);
     }
   }
 
@@ -417,12 +409,11 @@ function groupBoxes() {
   return model.groups.filter((g) => g.w).map((g) => ({ g, x: g.x, y: g.y, w: g.w, h: g.h }));
 }
 
-// Groups behave like Miro frames: a block belongs to whichever group box its
-// centre sits in. Dragging a block out of a group takes it out, dropping one
-// in adds it. `boxes` are the group boxes as they were before the change, so
-// a group stretching to follow a block being dragged out can't keep it.
-// Groups that are moving as a whole are left alone -- moving a group isn't
-// regrouping anything.
+// A new block -- placed, pasted, or dropped as a copy -- joins the innermost
+// group box its centre lands in. Moving a block never changes its group: the
+// box grows to keep it, and Group, Add to group and Remove from group are how
+// membership changes. `boxes` are the group boxes from before the new blocks
+// existed. Groups that came along whole (a pasted group) are left alone.
 function regroup(all, boxes) {
   const nodes = all.filter((n) => !isPoint(n));      // a loose line end belongs to no group
   const ids = new Set(nodes.map((n) => n.id));
@@ -1405,11 +1396,6 @@ function startMove(p) {
     mode: 'move', start: p, nodes, bounds: boundsOf(nodes), guides: [],
     boxes: nodes.map((m) => ({ n: m, x: m.x, y: m.y })),
     riders: riders(new Set(nodes.map((m) => m.id))),
-    // Group membership and boxes as they were at pointerdown. Every move
-    // re-decides membership from these, so a block dragged out of a group and
-    // back in again ends up where it started.
-    members: model.groups.map((g) => [g, g.members.slice()]),
-    groupBoxes: groupBoxes(),
   };
 }
 
@@ -1602,6 +1588,7 @@ function onPointerMove(ev) {
     pasteClipboard(0, 0);
     clipboard = saved;
     startMove(start);
+    drag.copyOnMove = true;      // still a copy-drag: the drop decides the copies' group
     drag.undoPushed = true;      // the paste took the snapshot; the move is part of the same step
   }
 
@@ -1655,10 +1642,7 @@ function onPointerMove(ev) {
       b.n.y = b.y + dy;
     }
     for (const r of drag.riders) r.e.points = r.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
-    for (const [g, members] of drag.members) g.members = members.slice();
-    regroup(drag.nodes, drag.groupBoxes);
-    // Not refitGroups: that drops groups that have emptied, and a group
-    // emptied halfway through a drag has to be able to come back.
+    // The groups grow (or shrink) to follow; nobody changes group.
     fitGroups(model);
     render();
     return;
@@ -1744,6 +1728,17 @@ function onPointerUp(ev) {
     svg.style.cursor = spaceDown ? 'grab' : 'default';
     render();
     return;
+  }
+  if (d.mode === 'move' && d.copyOnMove && d.undoPushed) {
+    // Copies are new blocks, so like pasted ones they join the group they're
+    // dropped in; the originals stayed in theirs. Measured with the copies out
+    // of every group, or a group that stretched to follow one would keep it.
+    const ids = new Set(d.nodes.map((n) => n.id));
+    for (const g of model.groups) {
+      if (!groupNodeIds(model, g).every((m) => ids.has(m))) g.members = g.members.filter((m) => !ids.has(m));
+    }
+    fitGroups(model);
+    regroup(d.nodes, groupBoxes());
   }
   if (d.undoPushed) { commit(); return; }
   // A click that never became a drag: now it's safe to shrink the selection.

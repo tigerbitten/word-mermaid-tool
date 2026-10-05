@@ -155,7 +155,7 @@
   <div class="topbar">
     <button class="tab active" id="tabCanvas">Canvas</button>
     <button class="tab" id="tabMd">Mermaid</button>
-    <span class="build">build v31</span>
+    <span class="build">build v32</span>
   </div>
 
   <div class="pane" id="canvasPane">
@@ -183,7 +183,6 @@
     <div class="md-actions">
       <button id="applyBtn" class="primary">Apply to canvas</button>
       <button id="copyBtn">Copy for LLM</button>
-      <button id="newBtn">Start over</button>
     </div>
   </div>
 
@@ -196,12 +195,13 @@
     <button id="insertBtn" class="primary" title="Put this diagram into the document, below the cursor">Insert</button>
     <button id="replaceBtn" title="Replace the diagram you opened (or the one selected in the document) with this one">Update</button>
     <button id="loadBtn" title="Edit the diagram selected in the document: click it there first">Open</button>
+    <button id="newBtn" title="Clear the canvas to build a new diagram (Ctrl+Z brings this one back)">New</button>
     <label id="svgOpt" title="Vector pictures: sharp at any zoom and in print. Word versions without SVG show the PNG kept inside. Untick for plain PNG pictures."><input type="checkbox" id="svgBox"> SVG</label>
   </div>
 
-<script src="diagram.js?v=31"></script>
-<script src="render.js?v=31"></script>
-<script src="editor.js?v=31"></script>
+<script src="diagram.js?v=32"></script>
+<script src="render.js?v=32"></script>
+<script src="editor.js?v=32"></script>
 <script>
   // Scale the whole UI to the display. vw is the *pane* width inside the
   // taskpane iframe, not the monitor, so it can't be used for this.
@@ -713,17 +713,28 @@
       if (info.nodes.some((n) => n.shape !== 'text')) add(fillButton(info.nodes), borderButton(info.nodes));
       if (info.nodes.some(TURNS)) add(button('⟳', turnSelection, 'Turn 90° clockwise'));
       if (texty.length) {
-        add(sep(), nodeFontStepper(texty), boldButton(texty.every((n) => n.bold)), italicButton(texty.every((n) => n.italic)),
+        add(sep());
+        if (info.nodes.length === 1) add(button('✎ Edit text', () => editSelectedLabel(), 'Edit the text (F2, Enter or double-click)'));
+        add(nodeFontStepper(texty), boldButton(texty.every((n) => n.bold)), italicButton(texty.every((n) => n.italic)),
             underlineButton(texty.every((n) => n.underline)),
             textColorButton(texty[0].color, (c) => applyToNodes((n) => { n.color = c || undefined; })), alignTextButton(texty));
       }
       if (info.nodes.length > 1) add(sep(), alignSelect(info.nodes.length));
+      // Grouping is only ever done here (or in the right-click menu): dragging
+      // a block never takes it out of its group or puts it in another.
       add(sep());
       if (info.group) {
         add(chip('in “' + info.group.label + '”', membersText(info.group)),
-            button('Remove', () => reportRefusal(removeSelectionFromGroup(), 'removed from group'), 'Take out of the group'));
+            button('Remove from group', () => reportRefusal(removeSelectionFromGroup(), 'removed from group'), 'Take out of the group'));
       } else {
-        add(button('Group', () => reportRefusal(groupSelection(), 'grouped'), 'Group (Ctrl+G)'));
+        add(button('Group', () => reportRefusal(groupSelection(), 'grouped'), 'Make a new group of the selection (Ctrl+G)'));
+      }
+      const others = info.allGroups.filter((g) => g !== info.group);
+      if (others.length) {
+        add(dropdown([['', 'Add to group…']].concat(others.map((g) => [g.id, g.label || g.id])), '', (id) => {
+          const g = others.find((x) => x.id === id);
+          if (g) reportRefusal(addSelectionToGroup(id), 'added to “' + (g.label || g.id) + '”');
+        }, info.group ? 'Move into another group' : 'Add to an existing group'));
       }
       add(sep(), more);
     } else if (info.groups.length) {
@@ -1221,7 +1232,7 @@
     onModelChanged();
     fitView();
     showTab('canvas');
-    setStatus('cleared', 'success');
+    setStatus('new diagram -- Ctrl+Z brings the old one back', 'success');
   });
 
   document.getElementById('copyBtn').addEventListener('click', () => {

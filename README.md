@@ -25,8 +25,8 @@ Prototype. Word desktop on Windows and Mac.
   in the colour picker, and a pick is one undo step; line style, arrowheads, thickness,
   colour, label size, bold and reverse for connectors. **Right-click** for
   everything, including copy/paste style.
-- To rename a block: double-click it, press Enter or F2, or just select it and
-  start typing. Enter or Esc finishes (keeping what you typed), Shift+Enter
+- To rename a block: click **✎ Edit text** on its toolbar, double-click it,
+  press Enter or F2, or just select it and start typing. Enter or Esc finishes (keeping what you typed), Shift+Enter
   gives you a second line. Double-clicking a connector edits its label the
   same way. A connector's text sits near its middle but off blocks, other
   lines and bends; drag the text to slide it along the connector.
@@ -77,11 +77,14 @@ Prototype. Word desktop on Windows and Mac.
   groups go in whole. Ungrouping an inner group leaves its blocks in the one
   around it. Pasted Mermaid with nested `subgraph`s, or a connector to a whole
   subgraph (`User --> Cloud`), comes in the same way.
-- Groups work like Miro frames: drag a group by its body, drag a block out to
-  remove it, drop a block in to add it (the group lights up green as you do).
-  Selecting a block outlines its group and tints the other members; the
-  toolbar and right-click menu name the group and offer *Add to…* / *Remove*.
-  Select a group to change its title size.
+- Groups change only when you say so. A selected block's toolbar has
+  **Group** (a new group of the selection), **Add to group…** (any existing
+  group) and, for a block in a group, **Remove from group**; a selected
+  group's has **Ungroup**. Dragging a block never takes it out of its group:
+  the group's box grows to keep it. A new block — placed, pasted or
+  Alt-dragged off as a copy — joins the group it lands in. Drag a group by
+  its body to move it whole. Selecting a block outlines its group and tints
+  the other members. Select a group to change its title size.
 - Drag empty canvas, hold Space and drag anywhere, or scroll to pan;
   Ctrl+scroll or pinch to zoom.
 - The **Mermaid** tab shows the source at all times, and you can paste Mermaid
@@ -97,7 +100,8 @@ Prototype. Word desktop on Windows and Mac.
 - **Insert** drops the picture in. **Open** picks a
   diagram back up out of the document. **Update** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
-  A picture you resized in Word keeps that scale when updated.
+  A picture you resized in Word keeps that scale when updated. **New** clears
+  the canvas for the next diagram (Ctrl+Z brings the last one back).
 - Pictures go in as SVG, sharp at any zoom and in print (Word 2016 and later;
   older Word shows the 400 ppi PNG kept inside). If Word refuses the SVG, the
   picture goes in as a PNG and the status line says so. Untick **SVG**
