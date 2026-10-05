@@ -168,6 +168,28 @@ const DEFAULT_FONT_SIZE = 13;
 const DEFAULT_EDGE_W = 1.5;
 const DEFAULT_EDGE_FONT = 12;
 
+// The page a picture lands on in Word. Placed so a label at the default size
+// lands at 11pt -- the size of the body text around it (at a literal 1px =
+// 0.75pt it came out at 9.75pt, a visibly smaller, fussier diagram than the
+// document it sits in) -- and never wider than the text column or taller
+// than the page, which shrinks it, text and all. The layout uses this too:
+// it is what decides how a pasted diagram is arranged.
+const PX_TO_PT = 11 / DEFAULT_FONT_SIZE;
+const MAX_DOC_WIDTH_PT = 468;    // 6.5in: US Letter minus one-inch margins
+// 8.5in: the 9in of text height on that page, less a line for a caption.
+// Taller and the picture runs off the bottom of the page.
+const MAX_DOC_HEIGHT_PT = 612;
+const EXPORT_PAD = 24;           // the picture's white margin, each side
+
+// The page's text column and height in px at full size, less the margin.
+const PAGE_W_PX = MAX_DOC_WIDTH_PT / PX_TO_PT - 2 * EXPORT_PAD;
+const PAGE_H_PX = MAX_DOC_HEIGHT_PT / PX_TO_PT - 2 * EXPORT_PAD;
+
+// How much a picture w x h px (margin included) is shrunk to fit the page.
+function pageFit(w, h) {
+  return Math.min(1, MAX_DOC_WIDTH_PT / (w * PX_TO_PT), MAX_DOC_HEIGHT_PT / (h * PX_TO_PT));
+}
+
 function newDiagram() {
   return { direction: 'LR', nodes: [], edges: [], groups: [] };
 }
@@ -1536,66 +1558,127 @@ function applyLayout(d, layout, invisible) {
     const grouped = new Set(d.groups.flatMap((g) => g.members));
     const links = d.edges.map((e) => [e.from, e.to]).concat(invisible);
     const top = d.groups.filter((g) => !g.parent).concat(d.nodes.filter((n) => !grouped.has(n.id)));
-    const size = layoutBlock(d, top, 40, 40, d.direction, links);
-    // A row of sideways subgraphs comes out many times wider than tall, and
-    // Word shrinks it to the column: its text ends up a few points high. The
-    // subgraphs are stacked instead, each still running sideways inside.
-    const sideways = d.direction === 'LR' || d.direction === 'RL';
-    const groups = top.filter((it) => it.members && !it.direction);
-    // Only a diagram made of subgraphs: with blocks between them the flow
-    // itself runs sideways, and stacking would just make it tall.
-    if (sideways && size.w > 4 * size.h && groups.length > 1 && groups.length === top.length) {
-      // Kept: the alt text then says what the picture shows -- subgraphs
-      // running sideways, stacked down the page.
-      groups.forEach((g) => { g.direction = d.direction; });
-      layoutBlock(d, top, 40, 40, 'TB', links);
-    } else if (!d.groups.length) wrapLong(d, size);
+    arrange(d, top, links);
   } else if (unplaced.length) {
-    const placed = d.nodes.filter((n) => !unplaced.includes(n));
-    const bottom = Math.max(...placed.map((n) => n.y + n.h)) + 60;
-    const left = Math.min(...placed.map((n) => n.x));
-    const ids = new Map(unplaced.map((n, i) => [n.id, i]));
-    const pairs = d.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => [ids.get(e.from), ids.get(e.to)]);
-    layerItems(unplaced, pairs).forEach((layer, k) => layer.forEach((n, i) => {
-      n.x = left + i * (DEFAULT_W + 80);
-      n.y = bottom + k * (DEFAULT_H + 50);
-    }));
+    placeNew(d, unplaced);
   }
   fitGroups(d);
 }
 
-// A long chain (a 15-step pipeline written LR) comes out as one strip far
-// wider than the page, and Word shrinks its text to nothing. Past about 1000px
-// (text under 6pt at full column width) it is wrapped: cut between stages
-// into rows read left to right, top to bottom (columns, for a long top-down
-// flow). Only for diagrams with no subgraphs, whose blocks can be moved freely.
-const WRAP_AT = 1000;
-function wrapLong(d, size) {
+// Blocks added to a diagram that already has a layout -- by an LLM, or typed
+// in the Mermaid tab -- go beside what they connect to, and everything placed
+// stays put: after a block a new one follows, before one it leads to, between
+// two it joins, along the way the diagram runs, and in line with them across
+// it -- in the nearest spot that overlaps nothing. A chain of new blocks is
+// placed link by link. Ones connected to nothing placed go in rows below.
+function placeNew(d, unplaced) {
   const across = d.direction === 'LR' || d.direction === 'RL';
-  const [len, wide, pos, cross, crossSize] = across ? [size.w, size.h, 'x', 'y', 'h'] : [size.h, size.w, 'y', 'x', 'w'];
-  if (len < WRAP_AT || len < 3 * wide) return;
-  const parts = Math.min(6, Math.ceil(len / (WRAP_AT * 0.55)));
-  // The stages, by where each block starts along the flow. Only a plain
-  // chain, one block a stage, is wrapped: cutting a flow that branches
-  // scatters its branches and crosses their connectors.
-  const starts = [...new Set(d.nodes.map((n) => Math.round(n[pos])))].sort((a, b) => a - b);
-  if (starts.length !== d.nodes.length) return;
-  // ...and only with every connector joining neighbouring stages: a loop back
-  // (a datapath's feedback) would have to cross the rows to get home.
-  const stage = new Map(d.nodes.map((n) => [n.id, starts.indexOf(Math.round(n[pos]))]));
-  if (d.edges.some((e) => Math.abs(stage.get(e.from) - stage.get(e.to)) !== 1)) return;
-  const reversed = d.direction === 'RL' || d.direction === 'BT';
-  const per = Math.ceil(starts.length / parts);
-  const rowOf = new Map(starts.map((v, i) => [v, Math.floor((reversed ? starts.length - 1 - i : i) / per)]));
-  const rowStart = [];
-  for (const [v, r] of rowOf) rowStart[r] = rowStart[r] == null ? v : (reversed ? Math.max(rowStart[r], v) : Math.min(rowStart[r], v));
-  const first = reversed ? Math.max(...starts) : Math.min(...starts);
-  const band = Math.max(...d.nodes.map((n) => n[cross] + n[crossSize])) - Math.min(...d.nodes.map((n) => n[cross])) + 70;
-  for (const n of d.nodes) {
-    const r = rowOf.get(Math.round(n[pos]));
-    n[pos] += first - rowStart[r];
-    n[cross] += r * band;
+  const back = d.direction === 'RL' || d.direction === 'BT';
+  const [along, cross, alongSize, crossSize] = across ? ['x', 'y', 'w', 'h'] : ['y', 'x', 'h', 'w'];
+  const GAP = across ? 80 : 60;
+  const placed = d.nodes.filter((n) => !unplaced.includes(n));
+  const clear = (n) => placed.every((m) => n.x >= m.x + m.w + 20 || m.x >= n.x + n.w + 20 || n.y >= m.y + m.h + 20 || m.y >= n.y + n.h + 20);
+  const mean = (ns, k) => ns.reduce((sum, m) => sum + (k === 'x' ? cx(m) : cy(m)), 0) / ns.length;
+  let todo = unplaced.slice();
+  for (let progress = true; progress && todo.length;) {
+    progress = false;
+    for (const n of todo) {
+      const ends = (from) => d.edges.filter((e) => (from ? e.to === n.id : e.from === n.id))
+        .map((e) => nodeById(d, from ? e.from : e.to)).filter((m) => m && placed.includes(m));
+      const before = ends(true);
+      const after = ends(false);
+      if (!before.length && !after.length) continue;
+      // Along the flow: just past what it follows, just short of what it leads to, or between.
+      const lead = (ms) => (back ? Math.min(...ms.map((m) => m[along])) - GAP - n[alongSize] : Math.max(...ms.map((m) => m[along] + m[alongSize])) + GAP);
+      const lag = (ms) => (back ? Math.max(...ms.map((m) => m[along] + m[alongSize])) + GAP : Math.min(...ms.map((m) => m[along])) - GAP - n[alongSize]);
+      const at = before.length && after.length ? (mean(before, along) + mean(after, along)) / 2 - n[alongSize] / 2
+        : before.length ? lead(before) : lag(after);
+      const mid = mean(before.concat(after), cross) - n[crossSize] / 2;
+      n[along] = Math.round(at);
+      // Across: in line with its neighbours, else the nearest clear spot either side.
+      const step = n[crossSize] + 30;
+      for (let k = 0; k < 20; k++) {
+        n[cross] = Math.round(mid + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * step);
+        if (clear(n)) break;
+      }
+      placed.push(n);
+      progress = true;
+    }
+    todo = todo.filter((n) => !placed.includes(n));
   }
+  if (!todo.length) return;
+  const bottom = Math.max(...placed.map((n) => n.y + n.h)) + 60;
+  const left = Math.min(...placed.map((n) => n.x));
+  const ids = new Map(todo.map((n, i) => [n.id, i]));
+  const pairs = d.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => [ids.get(e.from), ids.get(e.to)]);
+  layerItems(todo, pairs).forEach((layer, k) => layer.forEach((n, i) => {
+    n.x = left + i * (DEFAULT_W + 80);
+    n.y = bottom + k * (DEFAULT_H + 50);
+  }));
+}
+
+// A pasted diagram is laid out a few ways and the most legible kept. Word's
+// page is portrait and 6.5in wide, so a flow of more than three or four stages
+// laid out the way it was written comes out a strip Word shrinks to tiny text
+// (a nine-stage datapath came out at 3pt). So it is also tried turned the
+// other way -- with its subgraphs still running the written way inside, too --
+// and cut into one to six bands. The cheapest arrangement is kept: each
+// connector crossing, extra band and turn of the flow costs one, and text
+// under 10pt costs the square of the points it's short -- 5 at 7.7pt, 24 at
+// 5pt, 44 at 3.4pt -- so unreadable text loses to almost anything, while a
+// slightly smaller picture beats a tangle of crossings. Crossings are counted
+// where the router is loaded (the pane), not in `node test.js`.
+function arrange(d, top, links) {
+  const written = d.direction;
+  const turned = { LR: 'TD', RL: 'BT', TD: 'LR', BT: 'RL' }[written];
+  // Groups with no direction of their own follow the diagram's.
+  const follow = d.groups.filter((g) => !g.direction);
+  const setUp = (direction, keepGroups) => {
+    d.direction = direction;
+    for (const g of follow) { if (keepGroups) g.direction = written; else delete g.direction; }
+  };
+  const tries = [];
+  for (const [direction, keepGroups] of [[written, false], [turned, false], [turned, true]]) {
+    if (keepGroups && !follow.length) continue;
+    setUp(direction, keepGroups);
+    for (let bands = 1; bands <= 6; bands++) {
+      const size = layoutBlock(d, top, 40, 40, direction, links, bands);
+      // Fewer than three stages to a band zig-zags more than it saves.
+      if (size.bands < bands || (bands > 1 && size.layers < 3 * bands)) break;
+      fitGroups(d);
+      const crossings = typeof crossingCount === 'function' ? crossingCount(d) : 0;
+      const pt = 11 * pageFit(size.w + 2 * EXPORT_PAD, size.h + 2 * EXPORT_PAD);
+      tries.push({ direction, keepGroups, bands,
+                   cost: crossings + (bands - 1) + (direction === written ? 0 : 1) + Math.max(0, 10 - pt) ** 2 });
+    }
+  }
+  // Stable sort: on equal cost, the one tried first -- as written, fewest bands.
+  const pick = tries.slice().sort((p, q) => p.cost - q.cost)[0];
+  setUp(pick.direction, pick.keepGroups);
+  layoutBlock(d, top, 40, 40, pick.direction, links, pick.bands);
+  // A group's blocks are laid out before anything round it is placed, in the
+  // order they were written. Now that everything has a place, each group's
+  // blocks are put in the order of what they connect to outside it, and that
+  // is kept if it crosses fewer lines.
+  if (!d.groups.length || typeof crossingCount !== 'function') return;
+  fitGroups(d);
+  const before = crossingCount(d);
+  const pull = new Map();
+  for (const n of d.nodes) {
+    const g = d.groups.find((x) => x.members.includes(n.id));
+    if (!g) continue;
+    let own = g;
+    while (own && !own.direction) own = groupById(d, own.parent);
+    const across = /LR|RL/.test(own ? own.direction : d.direction) ? 'y' : 'x';
+    const inside = new Set(groupNodeIds(d, g));
+    const outside = d.edges.flatMap((e) => (e.from === n.id ? [e.to] : e.to === n.id ? [e.from] : []))
+      .map((id) => endOf(d, id)).filter((x) => x && !inside.has(x.id));
+    if (outside.length) pull.set(n.id, outside.reduce((sum, x) => sum + centerOf(x)[across], 0) / outside.length);
+  }
+  const saved = d.nodes.map((n) => [n.x, n.y]);
+  layoutBlock(d, top, 40, 40, pick.direction, links, pick.bands, pull);
+  fitGroups(d);
+  if (crossingCount(d) >= before) d.nodes.forEach((n, i) => { [n.x, n.y] = saved[i]; });
 }
 
 // `items` in layers along the flow, each after everything that points to it
@@ -1636,12 +1719,23 @@ function layerItems(items, pairs) {
   forward.forEach((bs) => bs.forEach((b) => indeg[b]++));
   const queue = [];
   for (let i = 0; i < n; i++) if (!indeg[i]) queue.push(i);
+  const topo = [];
   while (queue.length) {
     const a = queue.shift();
+    topo.push(a);
     for (const b of forward[a]) {
       depth[b] = Math.max(depth[b], depth[a] + 1);
       if (!--indeg[b]) queue.push(b);
     }
+  }
+  // Each item goes as early as its inputs allow, so a side input -- a config
+  // store, a clock -- feeding stage 5 lands at stage 0, with a long line across
+  // everything between. One with more connectors out than in moves as late as
+  // its outputs allow: that shortens more connectors than it stretches.
+  const ins = new Array(n).fill(0);
+  forward.forEach((bs) => bs.forEach((b) => ins[b]++));
+  for (const a of topo.slice().reverse()) {
+    if (forward[a].length > ins[a]) depth[a] = Math.max(depth[a], Math.min(...forward[a].map((b) => depth[b])) - 1);
   }
   const layers = [];
   for (let i = 0; i < n; i++) (layers[depth[i]] = layers[depth[i]] || []).push(i);
@@ -1668,10 +1762,13 @@ function layerItems(items, pairs) {
 // Lays `items` (blocks and groups) out in layers along the diagram's
 // direction, the way the connectors between them run, with its top-left at
 // x0,y0; a group's own contents are laid out first, inside it. Each layer is
-// centred across the flow. Returns the size taken.
+// centred across the flow. `bands` cuts the layers into that many runs of
+// about equal length, each placed after the one before across the flow: rows
+// read top to bottom for a sideways flow, columns for a downward one. Returns
+// the size taken and how many bands it made.
 // `links` are [from, to] ids: the connectors, and invisible `~~~` links,
 // which order blocks just the same.
-function layoutBlock(d, items, x0, y0, direction, links) {
+function layoutBlock(d, items, x0, y0, direction, links, bands = 1, pull = null, nested = false) {
   // In the order written: a group where its first block was written.
   const written = (it) => Math.min(...(it.members ? groupNodeIds(d, it) : [it.id]).map((id) => d.nodes.findIndex((m) => m.id === id)));
   items = items.slice().sort((p, q) => written(p) - written(q));
@@ -1682,7 +1779,7 @@ function layoutBlock(d, items, x0, y0, direction, links) {
   for (const it of items) {
     if (!it.members) { sizes.set(it, { w: it.w, h: it.h }); continue; }
     const inner = layoutBlock(d, it.members.map((id) => nodeById(d, id)).filter(Boolean).concat(childGroups(d, it)), 0, 0,
-      it.direction || direction, links);
+      it.direction || direction, links, 1, pull, true);
     sizes.set(it, { w: Math.max(inner.w, groupTabWidthEstimate(it)) + GROUP_PAD * 2, h: inner.h + GROUP_PAD * 2 + groupTitleH(it) });
   }
   // Which item each block or group id sits in, so a connector between two
@@ -1705,11 +1802,27 @@ function layoutBlock(d, items, x0, y0, direction, links) {
   };
   const pairs = links.filter(([a, b]) => home.has(a) && home.has(b))
     .map(([a, b]) => [home.get(a), home.get(b), across_(a, home.get(a)), across_(b, home.get(b))]);
-  const layers = layerItems(items, pairs);
-  if (direction === 'RL' || direction === 'BT') layers.reverse();
-
   const span = (layer) => layer.reduce((sum, it) => sum + (across ? sizes.get(it).h : sizes.get(it).w), 0) + GAP_ACROSS * (layer.length - 1);
-  const widest = Math.max(0, ...layers.map(span));
+  // A layer wider across the flow than the page (one block fanning out to a
+  // dozen) is split into a few, one after another along the flow, its items
+  // dealt out in turn -- a brick pattern, the lines to the second row passing
+  // between the blocks of the first.
+  const room = across ? PAGE_H_PX : PAGE_W_PX;
+  const deal = (layer, k) => Array.from({ length: k }, (_, j) => layer.filter((it, i) => i % k === j));
+  // `pull`, inside a group: where each block's connections outside the group
+  // sit across the flow (see arrange). A layer whose items all have one is put
+  // in that order, so the lines out of the group don't cross on their way.
+  const pulled = (it) => {
+    const ids = it.members ? groupNodeIds(d, it) : [it.id];
+    const vs = ids.filter((id) => pull && pull.has(id)).map((id) => pull.get(id));
+    return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+  };
+  const layers = layerItems(items, pairs).map((layer) => (!nested || !pull || layer.some((it) => pulled(it) == null)
+    ? layer : layer.slice().sort((p, q) => pulled(p) - pulled(q)))).flatMap((layer) => {
+    let k = 1;
+    while (k < layer.length && Math.max(...deal(layer, k).map(span)) > room) k++;
+    return deal(layer, k);
+  });
   // Room along the flow for the connector text between two neighbouring
   // layers: labels on connectors between the same two items sit side by side.
   const layerOf = new Map();
@@ -1730,27 +1843,53 @@ function layoutBlock(d, items, x0, y0, direction, links) {
     }
     return per.size ? Math.max(...per.values()) + 2 * STUB + 8 : 0;
   };
-  let along = 0;
-  for (const [k, layer] of layers.entries()) {
-    let side = (widest - span(layer)) / 2;
-    const thick = Math.max(...layer.map((it) => (across ? sizes.get(it).w : sizes.get(it).h)));
-    for (const it of layer) {
-      const sz = sizes.get(it);
-      // Centred in the layer's thickness too, so a short block lines up with a tall one's middle.
-      const inset = (thick - (across ? sz.w : sz.h)) / 2;
-      const x = Math.round(across ? x0 + along + inset : x0 + side);
-      const y = Math.round(across ? y0 + side : y0 + along + inset);
-      if (it.members) {
-        const dx = x + GROUP_PAD;
-        const dy = y + GROUP_PAD + groupTitleH(it);
-        for (const id of groupNodeIds(d, it)) { const n = nodeById(d, id); if (n) { n.x += dx; n.y += dy; } }
-      } else { it.x = x; it.y = y; }
-      side += (across ? sz.h : sz.w) + GAP_ACROSS;
-    }
-    along += thick + Math.max(GAP_ALONG, labelRoom(k));
+  const thick = (layer) => Math.max(...layer.map((it) => (across ? sizes.get(it).w : sizes.get(it).h)));
+  const gapAfter = (k) => Math.max(GAP_ALONG, labelRoom(k));
+  // The bands: runs of consecutive layers, each about the total length over
+  // `bands` long.
+  const total = layers.reduce((sum, l, k) => sum + thick(l) + gapAfter(k), 0);
+  const runs = [];
+  let length = Infinity;
+  layers.forEach((layer, k) => {
+    if (length + thick(layer) > total / bands && runs.length < bands) { runs.push([]); length = 0; }
+    runs[runs.length - 1].push(k);
+    length += thick(layer) + gapAfter(k);
+  });
+  // Room between bands for the connectors that run from one to the next.
+  const BAND_GAP = 70;
+  let crossAt = 0;
+  let longest = 0;
+  for (const run of runs) {
+    const widest = Math.max(0, ...run.map((k) => span(layers[k])));
+    // RL and BT run each band's layers the other way; the bands themselves
+    // still follow the flow, first band first.
+    const placed = direction === 'RL' || direction === 'BT' ? run.slice().reverse() : run;
+    let along = 0;
+    placed.forEach((k, j) => {
+      const layer = layers[k];
+      let side = crossAt + (widest - span(layer)) / 2;
+      for (const it of layer) {
+        const sz = sizes.get(it);
+        // Centred in the layer's thickness too, so a short block lines up with a tall one's middle.
+        const inset = (thick(layer) - (across ? sz.w : sz.h)) / 2;
+        const x = Math.round(across ? x0 + along + inset : x0 + side);
+        const y = Math.round(across ? y0 + side : y0 + along + inset);
+        if (it.members) {
+          const dx = x + GROUP_PAD;
+          const dy = y + GROUP_PAD + groupTitleH(it);
+          for (const id of groupNodeIds(d, it)) { const n = nodeById(d, id); if (n) { n.x += dx; n.y += dy; } }
+        } else { it.x = x; it.y = y; }
+        side += (across ? sz.h : sz.w) + GAP_ACROSS;
+      }
+      along += thick(layer);
+      if (j < placed.length - 1) along += gapAfter(Math.min(k, placed[j + 1]));
+    });
+    longest = Math.max(longest, along);
+    crossAt += widest + BAND_GAP;
   }
-  along = Math.max(0, along - Math.max(GAP_ALONG, labelRoom(layers.length - 1)));
-  return across ? { w: along, h: widest } : { w: widest, h: along };
+  crossAt = Math.max(0, crossAt - BAND_GAP);
+  const made = { bands: runs.length, layers: layers.length };
+  return across ? { w: longest, h: crossAt, ...made } : { w: crossAt, h: longest, ...made };
 }
 
 // A group's title tab must fit across its box. render.js measures text

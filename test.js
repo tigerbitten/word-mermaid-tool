@@ -44,8 +44,12 @@ d = parseMermaid('flowchart LR\n  A --o B\n  A --x C\n  A o--o D\n  A e1@--> E\n
 check('circle, cross and named links keep both ends', edges(d) === 'A>B A>C A>D A>E' && ids(d) === 'A,B,C,D,E', [ids(d), edges(d)]);
 d = parseMermaid('flowchart LR\n  A:::hot --> B --> C\n  class B cool\n  classDef hot fill:#f96\n  classDef cool fill:#9cf\n  style C fill:#9f9');
 check('classDef colours reach their blocks', d.nodes.map((n) => n.fill).join() === '#f96,#9cf,#9f9', d.nodes.map((n) => n.fill));
-d = parseMermaid('flowchart TD\n  A --> B\n  A --> C\n  A --> D\n  A --> E');
-check('a wide fan-out stays top-down', /^flowchart TD/.test(toMermaid(d)), toMermaid(d).split('\n')[0]);
+d = parseMermaid('flowchart TD\n  A --> B\n  A --> C');
+check('a fan-out that fits the page stays top-down', /^flowchart TD/.test(toMermaid(d)), toMermaid(d).split('\n')[0]);
+d = parseMermaid('flowchart TD\n  A --> B\n  A --> C\n  A --> D\n  A --> E\n  A --> F');
+// The text column is about 505px at full size.
+check('one too wide for one row is arranged to fit the page', Math.max(...d.nodes.map((n) => n.x + n.w)) - 40 <= 505 &&
+  Math.max(...d.nodes.map((n) => n.y + n.h)) - 40 <= 675, [toMermaid(d).split('\n')[0], d.nodes.map((n) => [n.id, n.x, n.y])]);
 
 d = parseMermaid('Here is your diagram:\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nIt shows A feeding B.');
 check('a whole LLM reply gives its fenced diagram', edges(d) === 'A>B', edges(d));
@@ -84,13 +88,28 @@ check('a slanted shape ends at its nearest closer', d.nodes.map((n) => n.shape).
 let unreadable = '';
 try { parseMermaid('flowchart LR\n  A --> B\n  A -->> B'); } catch (e) { unreadable = e.message; }
 check("what can't be read is an error, not a dropped connector", /could not read "> B"/.test(unreadable), unreadable);
+
+// Blocks added to a laid-out diagram (an LLM's edit) go beside what they
+// connect to; everything already placed stays put.
+const LAID = '\n%% --- layout (word-mermaid-tool v1; safe to ignore) ---\n';
+const placedAt = (src) => { const r = parseMermaid(src); return (id) => r.nodes.find((n) => n.id === id); };
+let at3 = placedAt('flowchart LR\n  A --> B\n  B --> C' + LAID + '%% A 40,40 140x56\n%% B 260,40 140x56');
+check('a new block after one it follows, in line', at3('C').x >= 400 && at3('C').y === 40 && at3('A').x === 40 && at3('B').x === 260,
+  [at3('A'), at3('B'), at3('C')].map((n) => [n.id, n.x, n.y]));
+at3 = placedAt('flowchart TD\n  N --> A\n  A --> B' + LAID + '%% A 40,200 140x56\n%% B 40,320 140x56');
+check('a new block before one it leads to', at3('N').y + at3('N').h <= 200 && at3('N').x === 40, [at3('N').x, at3('N').y]);
+at3 = placedAt('flowchart TD\n  A --> X\n  X --> B' + LAID + '%% A 40,40 140x56\n%% B 40,400 140x56');
+check('a new block between two it joins', at3('X').y > 96 && at3('X').y + at3('X').h < 400 && at3('X').x === 40, [at3('X').x, at3('X').y]);
+at3 = placedAt('flowchart LR\n  A --> B\n  A --> C' + LAID + '%% A 40,40 140x56\n%% B 260,40 140x56');
+check('a new block finds a clear spot when its own is taken', at3('C').x >= 260 && Math.abs(at3('C').y - 40) >= 56 + 20,
+  [at3('C').x, at3('C').y]);
 d = parseMermaid('flowchart LR\n  A --> B\n  subgraph S\n    B\n  end\n  subgraph T\n    C --> B\n  end');
 check('a block mentioned in a subgraph joins it, the first one only', d.groups[0].members.join() === 'B' && d.groups[1].members.join() === 'C', d.groups);
 d = parseMermaid('flowchart LR\n  A["I #9829; it #amp; you"] --> B["`*draft* **only**`"]\n  subgraph S["`**Backend**`"]\n    C\n  end');
 check('entities and markdown decoded', d.nodes[0].label === 'I ♥ it & you' && d.nodes[1].label === 'draft only' && d.groups[0].label === 'Backend', [d.nodes.map((n) => n.label), d.groups[0].label]);
 d = parseMermaid('flowchart LR\n  A@{ shape: flag, label: "Tape" } --> B@{ shape: odd, label: "Odd" } --> C@{ shape: bolt, label: "Signal" }');
 check('paper tape, odd and a labelled bolt survive a round trip', /shape: flag, label: "Tape"/.test(toMermaid(d)) && /B>"Odd"\]/.test(toMermaid(d)) && /bolt, label: "Signal"/.test(toMermaid(d)), toMermaid(d));
-for (const [src, want] of [['flowchart TD\n  A --> B & C & D & E & F & G', 'TD'], ['flowchart RL\n  A --- B\n  B --- C', 'RL'],
+for (const [src, want] of [['flowchart TD\n  A --> B & C', 'TD'], ['flowchart RL\n  A --- B\n  B --- C', 'RL'],
   ['flowchart LR\n  subgraph S\n    direction TB\n    A --> B --> C\n  end\n  S --> D', 'LR']]) {
   check('direction kept: ' + src.split('\n')[1].trim(), toMermaid(parseMermaid(src)).startsWith('flowchart ' + want), toMermaid(parseMermaid(src)).split('\n')[0]);
 }
@@ -221,8 +240,10 @@ for (const src of SAMPLES) {
 d = parseMermaid(SAMPLES[0]);
 const span = Math.max(...d.nodes.map((n) => n.x + n.w)) - Math.min(...d.nodes.map((n) => n.x));
 check('a loop stays compact', span < 2000, span);
-const x = (id) => d.nodes.find((n) => n.id === id).x;
-check('the feedback arrow is the one cut (PC first, ALU after RF)', x('PC') < x('IMEM') && x('RF') < x('ALU'), d.nodes.map((n) => [n.id, n.x]));
+// Along whichever way the flow was laid out: sideways, or turned down the page.
+const along = (id) => { const n = d.nodes.find((m) => m.id === id); return d.direction === 'LR' || d.direction === 'RL' ? n.x : n.y; };
+check('the feedback arrow is the one cut (PC first, ALU after RF)', along('PC') < along('IMEM') && along('RF') < along('ALU'),
+  [d.direction, d.nodes.map((n) => [n.id, n.x, n.y])]);
 d = parseMermaid('flowchart TD\n  A --> B\n  B --> C{ok?}\n  C -->|No| D\n  D --> B\n  C -->|Yes| E --> F{again?}\n  F -->|No| D\n  F -->|Yes| G');
 const y = (id) => d.nodes.find((n) => n.id === id).y;
 check('an error step sits beside the check that leads to it, not at the bottom', y('D') === y('E'), d.nodes.map((n) => [n.id, n.y]));

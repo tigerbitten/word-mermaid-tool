@@ -1,4 +1,5 @@
-// Geometric defects in the pictures word-mermaid-tool draws for pasted Mermaid.
+// Geometric defects in the pictures word-mermaid-tool draws for pasted Mermaid,
+// connector crossings and bends, and the text size each picture ends up at in Word.
 //   node check.js              every ../stress/corpus/*.mmd and ../*.mmd
 //   node check.js 004 hw       only files whose name contains one of the args
 //   node check.js -v           also list every defect of every diagram
@@ -199,13 +200,27 @@ function analyze(src) {
     if (ratio > 3) add('detour', 5 + Math.min(20, (ratio - 3) * 4), `${tag} is ${Math.round(len)}px for ${Math.round(manh)}px apart (${ratio.toFixed(1)}x)`);
   });
 
+  // --- connectors crossing each other (any two legs of different connectors
+  // that properly intersect), and bends
+  const legs = [];
+  geom.forEach((pts, i) => { if (pts) for (let k = 1; k < pts.length; k++) legs.push([i, pts[k - 1], pts[k]]); });
+  const turn = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  let crossings = 0;
+  for (let a = 0; a < legs.length; a++) for (let b = a + 1; b < legs.length; b++) {
+    const [i, u, v] = legs[a], [j, p, q] = legs[b];
+    if (i !== j && turn(u, v, p) * turn(u, v, q) < 0 && turn(p, q, u) * turn(p, q, v) < 0) crossings++;
+  }
+  if (crossings) add('crossing', 3 * crossings, `${crossings} connector crossings`);
+  const bends = geom.reduce((s, pts) => s + (pts ? Math.max(0, pts.length - 2) : 0), 0);
+
   // --- the picture in Word
   const bnd = diagramBounds(d);
   const fit = pictureSize(d).fit;
   const ar = bnd.w / bnd.h;
   if (ar > 6 || ar < 0.25) add('aspect', 3 + (1 - fit) * 40, `${Math.round(bnd.w)}x${Math.round(bnd.h)} (${ar.toFixed(2)}:1), text at ${(fit * 11).toFixed(1)}pt in Word`);
   else if (fit < 0.6) add('aspect', 6 + (0.6 - fit) * 30, `${Math.round(bnd.w)}x${Math.round(bnd.h)}: shrunk to ${Math.round(fit * 100)}%, text at ${(fit * 11).toFixed(1)}pt`);
-  return { defects: out, nodes: d.nodes.length, edges: d.edges.length, groups: d.groups.length, size: [Math.round(bnd.w), Math.round(bnd.h)], fit };
+  return { defects: out, nodes: d.nodes.length, edges: d.edges.length, groups: d.groups.length, size: [Math.round(bnd.w), Math.round(bnd.h)], fit,
+    textPt: Math.round(fit * 110) / 10, crossings, bends };
 }
 
 module.exports = { analyze };
@@ -242,7 +257,12 @@ if (require.main === module) (async () => {
     kinds[x.kind] = kinds[x.kind] || { count: 0, diagrams: new Set() };
     kinds[x.kind].count++; kinds[x.kind].diagrams.add(r.file);
   }
-  console.log(`${results.length} diagrams, ${results.filter((r) => r.error).length} failed to parse/route\n`);
+  console.log(`${results.length} diagrams, ${results.filter((r) => r.error).length} failed to parse/route`);
+  const ok = results.filter((r) => !r.error);
+  const pts = ok.map((r) => r.textPt).sort((a, b) => a - b);
+  console.log(`text in Word: median ${pts[pts.length >> 1]}pt, ${pts.filter((p) => p < 8).length} under 8pt, ${pts.filter((p) => p < 6).length} under 6pt; ` +
+    `${ok.reduce((s, r) => s + r.crossings, 0)} crossings in ${ok.filter((r) => r.crossings).length} diagrams; ` +
+    `${(ok.reduce((s, r) => s + r.bends, 0) / Math.max(1, ok.reduce((s, r) => s + r.edges, 0))).toFixed(2)} bends a connector\n`);
   console.log('defect class        count  diagrams');
   for (const [k, v] of Object.entries(kinds).sort((a, b) => b[1].count - a[1].count)) console.log(k.padEnd(18), String(v.count).padStart(6), String(v.diagrams.size).padStart(9));
 

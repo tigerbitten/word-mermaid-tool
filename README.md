@@ -92,6 +92,13 @@ Prototype. Word desktop on Windows and Mac.
   edits apply when you go back to the canvas. Pasted diagrams are laid out
   for you: blocks sized to their text, groups kept together, and loops cut at
   their "go back" arrow so the flow reads top to bottom (or left to right).
+  The layout is made to fit a Word page: a flow too long to read at full
+  size is turned the other way or wrapped into rows (columns, for a downward
+  flow), and a block fanning out to many others puts them in staggered rows,
+  whichever arrangement keeps the text largest with the fewest crossing
+  lines. Lines fanning out of one side nest instead of crossing. Blocks an
+  LLM adds to a diagram you've already arranged go beside what they connect
+  to; everything you placed stays put.
   Flowcharts are read in full, styles included (named and rgb colours,
   borders, `classDef`s, `linkStyle default`), as are icon and image nodes
   (`@{ icon: "fa:user" }` is drawn with a built-in glyph for the icon's
@@ -100,7 +107,12 @@ Prototype. Word desktop on Windows and Mac.
 - **Insert** drops the picture in. **Open** picks a
   diagram back up out of the document. **Update** replaces the
   diagram you inserted or opened — no need to re-select it in the document.
-  A picture you resized in Word keeps that scale when updated. **New** clears
+  A picture you resized in Word keeps that scale when updated. A diagram
+  you've set to wrap with text (in front of text, behind it, square...)
+  opens and updates too, keeping its wrapping and position; Word only lets an
+  add-in place such a picture as a PNG, so it's updated as a 400 ppi one.
+  Word 2019 / 2021 can open those but not update them -- set the picture to
+  In Line with Text first. **New** clears
   the canvas for the next diagram (Ctrl+Z brings the last one back).
 - Pictures go in as SVG, sharp at any zoom and in print (Word 2016 and later;
   older Word shows the 400 ppi PNG kept inside). If Word refuses the SVG, the

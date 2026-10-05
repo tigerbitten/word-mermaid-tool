@@ -48,9 +48,13 @@ and the layout of pasted diagrams without a browser; run it after touching
   alt text can say; a new model field needs adding to both and to the fuzz.
 - `dev/visual`: `node check.js` lays out and routes every corpus diagram and
   scores what makes a picture hard to read: connectors through or along
-  blocks, shared lanes, connector text on blocks or other text, text
-  overflowing its shape, very wide pictures. It writes the worst as PNGs to
-  `worst/`. Run it after touching layout or routing.
+  blocks, shared lanes, connector crossings, connector text on blocks or other
+  text, text overflowing its shape, very wide pictures, and the text size the
+  picture ends up at in Word (its summary line: median and how many under
+  8pt / 6pt, crossings, bends). It writes the worst as PNGs to `worst/`. Run
+  it after touching layout or routing. Anything in the router that breaks a
+  tie must not depend on the order of `d.edges` -- saving reorders them, and
+  `dev/roundtrip.html` will catch a picture that changes on reopening.
 
 Known differences, on purpose: an empty subgraph is dropped; block-beta arrow
 blocks are plain blocks; state `--` regions are not drawn.

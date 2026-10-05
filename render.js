@@ -15,7 +15,6 @@ const FONT_STACK = 'Calibri, "Segoe UI", Helvetica, Arial, sans-serif';
 const LABEL_PAD_X = 14;
 const LABEL_PAD_Y = 12;
 const CORNER_R = 8;
-const EXPORT_PAD = 24;
 const EDGE_COLOR = '#555555';
 // How far a connector runs straight out of a block before it is allowed to
 // turn. Without it, edges leaving adjacent ports would kink immediately and
@@ -175,6 +174,14 @@ function sizeForLabel(n) {
   if (!n.label) return;
   if (n.shape === 'icon' || n.shape === 'image') return;
   const one = textWidth(shownLabel(n), n.fontSize || DEFAULT_FONT_SIZE, n.bold);
+  // A circle is drawn round, as Mermaid draws `((Users))`: just wide enough
+  // for its text in the middle 70% of it, not stretched into a wide ellipse.
+  if (n.shape === 'circle' || n.shape === 'doublecircle') {
+    n.w = n.h = Math.max(60, Math.min(160, Math.ceil((one + LABEL_PAD_X * 2) / 0.7 / 10) * 10));
+    fitNodeSize(n);
+    n.w = n.h = Math.max(n.w, n.h);
+    return;
+  }
   const textW = Math.min(240, one / 3 + LABEL_PAD_X * 2 + 20);
   n.w = Math.max(n.w, Math.ceil(textW * n.w / labelArea(n).w / 10) * 10);
   fitNodeSize(n);
@@ -922,7 +929,7 @@ function clutterCost(pts, obstacles, lanes) {
 // routeCost). That is what stops a connector from cutting through its own
 // blocks or doubling back when the ends face away from each other. The
 // middle-channel Z is tried first, so on a tie it wins: it's the balanced one.
-function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
+function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes, turn) {
   const M = STUB;
   const midX = (a0.x + b0.x) / 2;
   const midY = (a0.y + b0.y) / 2;
@@ -944,6 +951,9 @@ function routeBends(p0, s0, a0, A, p1, s1, b0, B, blocks, lanes) {
     const xs_ = uniq(xs);
     const ys_ = uniq(ys);
     const cands = [
+      // A fan's turn (routeAll), first: on a tie with the middle, it wins.
+      ...(turn == null ? [] : s0 === 'e' || s0 === 'w' ? [[{ x: turn, y: a0.y }, { x: turn, y: b0.y }]]
+        : [[{ x: a0.x, y: turn }, { x: b0.x, y: turn }]]),
       [{ x: midX, y: a0.y }, { x: midX, y: b0.y }],
       [{ x: a0.x, y: midY }, { x: b0.x, y: midY }],
       [],
@@ -1084,7 +1094,7 @@ function routeAll(d) {
     const c = [{ x: g.x, y: g.y }, { x: g.x + g.w, y: g.y }, { x: g.x + g.w, y: g.y + g.h }, { x: g.x, y: g.y + g.h }];
     for (let k = 0; k < 4; k++) lanes.push([c[k], c[(k + 1) % 4]]);
   }
-  const slots = d.edges.map((e) => {
+  const slots = d.edges.map((e, i) => {
     const a = endOf(d, e.from);
     const b = endOf(d, e.to);
     if (!a || !b) return null;
@@ -1125,10 +1135,15 @@ function routeAll(d) {
     }
     return {
       a, b,
-      from: { side: fromSide, t: fa.t, other: b, pinned: fa.t != null, out: true },
-      to: { side: toSide, t: ta.t, other: a, pinned: ta.t != null },
+      from: { side: fromSide, t: fa.t, other: b, pinned: fa.t != null, slot: i },
+      to: { side: toSide, t: ta.t, other: a, pinned: ta.t != null, slot: i },
     };
   });
+
+  // Ties anywhere below go by block names and by a connector's ends -- never by
+  // list position, which saving changes (see claimOrder).
+  const byKey = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const ends = (i) => d.edges[i].from + '\u0000' + d.edges[i].to;
 
   // Every end on each side of each block: the automatic ones to be spaced out,
   // and the pinned ones, whose spots the automatic ones must keep clear of --
@@ -1152,9 +1167,20 @@ function routeAll(d) {
     // (see claimOrder).
     const axis = free[0].side === 'n' || free[0].side === 's' ? 'x' : 'y';
     const cross = axis === 'x' ? 'y' : 'x';
+    // Between the same two blocks: by where on the other block each line
+    // ends (a decision's side corner sits further out than its bottom), then
+    // by the connector's own ends, so both blocks put lines between two
+    // facing sides in the same order and they don't cross each other.
+    const farAt = (end) => {
+      const s = slots[end.slot];
+      const far = end === s.from ? s.to : s.from;
+      // Its spot as attached by hand, or the side's middle: a free end's spot is
+      // being handed out in this same pass, sooner or later depending on order.
+      return anchorPoint(end.other, far.side, far.pinned ? far.t : 0.5)[axis];
+    };
     free.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis] ||
       centerOf(p.other)[cross] - centerOf(q.other)[cross] ||
-      (p.other.id < q.other.id ? -1 : p.other.id > q.other.id ? 1 : 0) || !!q.out - !!p.out);
+      byKey(p.other.id, q.other.id) || farAt(p) - farAt(q) || byKey(ends(p.slot), ends(q.slot)));
     // Evenly spaced spots for every end on the side; each pinned end claims
     // the spot nearest it, and the automatic ones take the rest in order.
     const n = free.length + pinned.length;
@@ -1214,6 +1240,40 @@ function routeAll(d) {
     }
   }
 
+  // A fan -- connectors leaving (or arriving at) one side of a block, each
+  // turning once on its way across -- gets its turns nested: the line to the
+  // outermost block turns nearest the fan, the next one out next, so none
+  // crosses another. Left to the lane search, they all want the middle and
+  // cross wherever they happened to land. Lines going up and lines going down
+  // nest separately; a connector in two fans takes its turn from the bigger.
+  const turns = new Map();
+  const opposite = { e: 'w', w: 'e', n: 's', s: 'n' };
+  for (const [, { free, pinned }] of [...buckets.entries()].sort(([kp, p], [kq, q]) =>
+    q.free.length + q.pinned.length - p.free.length - p.pinned.length || byKey(kp, kq))) {
+    const fan = free.concat(pinned).map((end) => {
+      const i = end.slot;
+      const s = slots[i];
+      const mine = end === s.from;
+      const far = mine ? s.to : s.from;
+      if (opposite[end.side] !== far.side || (d.edges[i].points && d.edges[i].points.length) || turns.has(i)) return null;
+      const [node, other] = mine ? [s.a, s.b] : [s.b, s.a];
+      const p = anchorPoint(node, end.side, end.t);
+      const q = anchorPoint(other, far.side, far.t);
+      const across = end.side === 'e' || end.side === 'w' ? 'y' : 'x';
+      const along = across === 'y' ? 'x' : 'y';
+      return { i, p, q, across, along, stub: stubOf(node, p, end.side)[along], farStub: stubOf(other, q, far.side)[along],
+               out: q[across] - centerOf(node)[across] };
+    }).filter((f) => f && Math.abs(f.p[f.across] - f.q[f.across]) >= 1);
+    if (fan.length < 2) continue;
+    const { along, stub } = fan[0];
+    // Between this side's stubs and the nearest far end's, so every turn fits every line.
+    const near = fan.reduce((b, f) => (Math.abs(f.farStub - stub) < Math.abs(b - stub) ? f.farStub : b), fan[0].farStub);
+    for (const side of [fan.filter((f) => f.out < 0), fan.filter((f) => f.out >= 0)]) {
+      side.sort((f, g) => Math.abs(g.out) - Math.abs(f.out) || byKey(ends(f.i), ends(g.i)));
+      side.forEach((f, k) => turns.set(f.i, Math.round(stub + (near - stub) * (k + 1) / (side.length + 1))));
+    }
+  }
+
   const routes = slots.map(() => null);
   for (const i of claimOrder(d)) routes[i] = ((s) => {
     if (!s) return null;
@@ -1231,7 +1291,7 @@ function routeAll(d) {
     const a0 = stubOf(s.a, p0, s.from.side);
     const b0 = stubOf(s.b, p1, s.to.side);
     const bends = d.edges[i].points && d.edges[i].points.length
-      ? d.edges[i].points : routeBends(p0, s.from.side, a0, s.a, p1, s.to.side, b0, s.b, blocks, lanes);
+      ? d.edges[i].points : routeBends(p0, s.from.side, a0, s.a, p1, s.to.side, b0, s.b, blocks, lanes, turns.get(i));
     const raw = joinOrthogonal([p0, a0].concat(bends, [b0, p1]));
     for (let k = 1; k < raw.length; k++) lanes.push([raw[k - 1], raw[k]]);
     return {
@@ -1252,6 +1312,20 @@ function routeAll(d) {
 function claimOrder(d) {
   const key = (i) => d.edges[i].from + '\u0000' + d.edges[i].to;
   return d.edges.map((e, i) => i).sort((i, j) => (key(i) < key(j) ? -1 : key(i) > key(j) ? 1 : 0));
+}
+
+// How many times connectors cross each other, routed as they'll be drawn.
+// The layout uses it to choose between arrangements of a pasted diagram.
+function crossingCount(d) {
+  const legs = [];
+  edgeGeometry(d).forEach((pts, i) => { if (pts) for (let k = 1; k < pts.length; k++) legs.push([i, pts[k - 1], pts[k]]); });
+  const turn = (p, q, r) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  let count = 0;
+  for (let a = 0; a < legs.length; a++) for (let b = a + 1; b < legs.length; b++) {
+    const [i, u, v] = legs[a], [j, p, q] = legs[b];
+    if (i !== j && turn(u, v, p) * turn(u, v, q) < 0 && turn(p, q, u) * turn(p, q, v) < 0) count++;
+  }
+  return count;
 }
 
 // What actually gets drawn: the routes with redundant points removed.
@@ -1596,14 +1670,6 @@ function buildExportSvg(d) {
 const TARGET_PPI = 400;
 const CANVAS_MAX_SIDE = 16384;
 const CANVAS_MAX_PIXELS = 16.7e6;
-// Placed so a label at the default size lands at 11pt -- the size of the body
-// text around it. At a literal 1px = 0.75pt it came out at 9.75pt, a visibly
-// smaller, fussier-looking diagram than the document it sits in.
-const PX_TO_PT = 11 / DEFAULT_FONT_SIZE;
-const MAX_DOC_WIDTH_PT = 468;    // 6.5in: US Letter minus one-inch margins
-// 8.5in: the 9in of text height on that page, less a line for a caption.
-// Taller and the picture runs off the bottom of the page.
-const MAX_DOC_HEIGHT_PT = 612;
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -1657,14 +1723,13 @@ function toBase64(bytes) {
   return btoa(s);
 }
 
-// The size a diagram is placed at in Word, in points: default-size text lands
-// at 11pt, and nothing is wider than the text column or taller than the page.
+// The size a diagram is placed at in Word, in points (pageFit, diagram.js).
 function pictureSize(d) {
   const b = diagramBounds(d);
-  let w = Math.ceil(b.w + EXPORT_PAD * 2) * PX_TO_PT;
-  let h = Math.ceil(b.h + EXPORT_PAD * 2) * PX_TO_PT;
-  const fit = Math.min(1, MAX_DOC_WIDTH_PT / w, MAX_DOC_HEIGHT_PT / h);
-  return { w: w * fit, h: h * fit, fit };
+  const w = Math.ceil(b.w + EXPORT_PAD * 2);
+  const h = Math.ceil(b.h + EXPORT_PAD * 2);
+  const fit = pageFit(w, h);
+  return { w: w * PX_TO_PT * fit, h: h * PX_TO_PT * fit, fit };
 }
 
 // The SVG Word gets for a vector picture. Word draws SVG with its own
