@@ -531,6 +531,7 @@ function dropStrayPoints() {
 function commit() {
   dropStrayPoints();
   refitGroups();
+  normalizeModel(model);
   // An action that changed nothing (centring centred text, a drag that ended
   // where it began) leaves no undo step that would seem to do nothing.
   if (undoStack.length && undoStack[undoStack.length - 1] === JSON.stringify(model)) undoStack.pop();

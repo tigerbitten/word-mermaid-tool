@@ -34,6 +34,18 @@ and the layout of pasted diagrams without a browser; run it after touching
   and block-beta structure, then checks the tool's output is valid Mermaid that
   Mermaid reads the same way and that a round trip is stable. Run it after
   touching the reader or writer; add a corpus entry for every bug found.
+- `dev/roundtrip.html`: the round-trip proof, no install -- open it in a
+  browser, or `chrome --headless --virtual-time-budget=180000 --dump-dom
+  dev/roundtrip.html`; the last line says ALL PASS (`?seed=N` tries another
+  set). 1000 random diagrams holding everything the editor can hold (every
+  shape, look, pin, class, nested group, connector to a group, and what a
+  paste keeps) go through toAltText -> parseMermaid and must come back with
+  byte-identical text, every field equal and the same picture; a sample is
+  rendered in real Mermaid 11.17.2 to check the same blocks, labels and
+  groups show. Run it after touching the writer, the reader, `normalizeModel`
+  or anything in routing that could depend on connector order. The editor
+  runs `normalizeModel` on every commit so what it holds is exactly what the
+  alt text can say; a new model field needs adding to both and to the fuzz.
 - `dev/visual`: `node check.js` lays out and routes every corpus diagram and
   scores what makes a picture hard to read: connectors through or along
   blocks, shared lanes, connector text on blocks or other text, text

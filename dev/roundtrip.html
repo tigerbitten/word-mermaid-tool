@@ -1,0 +1,308 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Round-trip proof</title>
+<!--
+  Proves a diagram survives the trip through Word's alt text. Open it in a
+  browser -- no install -- or headless:
+    chrome --headless --virtual-time-budget=120000 --dump-dom dev/roundtrip.html
+  The last line says ALL PASS or how many failed. roundtrip.html?seed=N tries
+  a different random set; the default one is the one that must pass.
+
+  1. Fuzz: 1000 random diagrams holding everything the editor can hold --
+     every shape, look, pin, class, group nesting, connector to a group, and
+     what a paste keeps (title, comments, icons, images, long links) -- put
+     through toAltText -> parseMermaid. The text must come back
+     byte-identical, every field must survive, and the picture drawn from it
+     must be the same SVG.
+  2. Real Mermaid 11.17.2 (the version dev/stress pins): a sample of those
+     must parse and render, with the same blocks, labels and groups showing.
+
+  Pasted Mermaid an LLM wrote is dev/stress's job; this is about what the
+  tool itself writes.
+-->
+<script src="../diagram.js"></script>
+<script src="../render.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js"></script>
+<pre id="out"></pre>
+<script>
+const out = document.getElementById('out');
+let failed = 0;
+let passed = 0;
+function check(ok, what, detail) {
+  if (ok) { passed++; return true; }
+  failed++;
+  out.textContent += 'FAIL ' + what + (detail ? '\n  ' + String(detail).replace(/\n/g, '\n  ') : '') + '\n';
+  return false;
+}
+
+// --- 1. fuzz -----------------------------------------------------------
+
+let seed = +(location.search.match(/seed=(\d+)/) || [0, 12345])[1];
+const rand = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
+const pick = (a) => a[Math.floor(rand() * a.length)];
+const maybe = (p, v) => (rand() < p ? v : undefined);
+
+// Everything that means something somewhere in Mermaid's grammar, plus the
+// labels a hardware diagram actually has.
+const LABELS = ['Block', 'ALU', 'addr[31:0]', 'say "hi"', 'a|b', '#1 & #2', '<br/> literal', '<b>x</b>',
+  'two\nlines', 'a -- b -- c', 'x == y ==> z', 'p -. q .-> r', 'A --> B', 'end', 'End', 'graph',
+  'style', 'click', 'default', 'subgraph', '%% not a comment', '%%{init}', 'semi; colon', '`tick`', 'é ✓ 漢字 🚀',
+  '  padded  ', ' ', '', '{curly}', '(paren)', '#quot;', '#35;', '#9829;', 'a:::b', 'o', 'x', 'oops', 'xray',
+  'fish &amp; chips', 'R&D', 'flowchart LR', '\\back\\slash', '"', '|', 'a]b', 'a)b', 'a}b', '[x]', '((y))',
+  'mux 4:1', 'FIFO\n(16 deep)', '1', '_', 'point', 'Group', 'constructor', '__proto__', 'a*b*c', '_x_',
+  '**b**', 'clk_en_n', '__u__', 'Attempts >= 3?', 'C# client', 'tab\there'];
+const SHAPE_NAMES = Object.keys(SHAPES).filter((s) => s !== 'point');
+const FILLS = ['#ffffff', '#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#ede9fe', '#eceff1', '#123abc'];
+const LINE_COLORS = [null, '#1f2937', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed'];
+const TEXT_COLORS = [null, '#ffffff', '#2563eb', '#16a34a', '#b45309', '#dc2626', '#7c3aed'];
+const GROUP_FILLS = [null, '#eff6ff', '#f0fdf4', '#fffbeb', '#fef2f2', '#f5f3ff', '#f1f5f9'];
+const GROUP_BORDERS = [null, '#3b82f6', '#22c55e', '#d97706', '#ef4444', '#8b5cf6', '#64748b'];
+const CLASS_DEFS = { hot: 'fill:#f96,stroke:#333,stroke-width:2px', cold: 'fill:lightblue,color:#003', zone: 'fill:#eef,stroke-dasharray:5 5' };
+
+function genModel() {
+  const d = newDiagram();
+  d.direction = pick(['LR', 'TD', 'RL', 'BT']);
+  const taken = () => new Set(d.nodes.map((n) => n.id).concat(d.groups.map((g) => g.id)));
+  const node = (shape, label, x, y) => {
+    const [w, h] = defaultSize(shape);
+    const n = { id: makeId(label || shape, taken()), label, shape, x, y, w, h,
+                fill: pick(FILLS), fontSize: pick([13, 13, 9, 11, 16, 24]), bold: rand() < 0.3 };
+    if (shape !== 'point') {
+      if (rand() < 0.5) { n.w = 10 + rand() * 300; n.h = 10 + rand() * 200; }
+      Object.assign(n, { stroke: maybe(0.2, pick(LINE_COLORS.slice(1))), strokeWidth: maybe(0.2, pick([1, 2.5, 4])),
+        dash: maybe(0.15, true), color: maybe(0.2, pick(TEXT_COLORS.slice(1))), italic: maybe(0.2, true),
+        underline: maybe(0.15, true), align: maybe(0.2, pick(['left', 'right'])), rotate: maybe(0.15, pick([90, 180, 270])),
+        classes: maybe(0.2, [pick(Object.keys(CLASS_DEFS))]) });
+    }
+    if (shape === 'icon') Object.assign(n, { icon: pick(['fa:user', 'aws:rds', 'fa:database']), form: maybe(0.5, pick(['circle', 'square', 'rounded'])) });
+    if (shape === 'image') n.img = pick(['../icon-64.png', '../icon-32.png']);
+    d.nodes.push(n);
+    return n;
+  };
+  const blocks = 1 + Math.floor(rand() * 10);
+  for (let i = 0; i < blocks; i++) {
+    const shape = pick(SHAPE_NAMES);
+    node(shape, LABELLESS.has(shape) && rand() < 0.8 ? '' : pick(LABELS), rand() * 1200 - 200, rand() * 900 - 100);
+  }
+  // Rows and columns, the way guides line things up: equal centres are where
+  // tie-breaks in the router show.
+  for (const n of d.nodes) if (rand() < 0.4) n.x = d.nodes[0].x + d.nodes[0].w / 2 - n.w / 2;
+
+  // Groups: disjoint members, some nested inside another.
+  for (let i = Math.floor(rand() * 4); i > 0; i--) {
+    const free = d.nodes.filter((n) => !d.groups.some((g) => g.members.includes(n.id)));
+    const members = free.filter(() => rand() < 0.4).map((n) => n.id);
+    if (!members.length) continue;
+    const label = pick(LABELS);
+    // A group's look: what a paste gave it (its class's, read into the
+    // fields), and then maybe the colour button, which sets or clears fill
+    // and border together.
+    const zone = rand() < 0.15;
+    const g = { id: makeId(rand() < 0.5 ? 'Group' : label, taken()), label, members,
+      parent: d.groups.length && rand() < 0.4 ? pick(d.groups).id : null, x: 0, y: 0, w: 0, h: 0,
+      fontSize: maybe(0.3, pick([12, 14, 20])), direction: maybe(0.2, pick(['TD', 'LR'])),
+      fill: zone ? '#eef' : maybe(0.2, '#fffbe6'), stroke: maybe(0.2, '#c00'), strokeWidth: maybe(0.15, 2),
+      dash: zone || maybe(0.15, true), color: maybe(0.15, '#4a148c'), classes: zone ? ['zone'] : undefined };
+    if (rand() < 0.5) {
+      const k = Math.floor(rand() * GROUP_FILLS.length);
+      g.fill = GROUP_FILLS[k] || undefined;
+      g.stroke = GROUP_BORDERS[k] || undefined;
+    }
+    d.groups.push(g);
+  }
+
+  const edges = Math.floor(rand() * (blocks * 2 + 1));
+  for (let i = 0; i < edges; i++) {
+    const end = () => rand() < 0.15 ? node('point', '', rand() * 1200, rand() * 900)
+      : rand() < 0.1 && d.groups.length ? pick(d.groups) : pick(d.nodes.filter((n) => !isPoint(n)));
+    const e = newEdge(end().id, end().id);
+    if (rand() < 0.4) e.label = pick(LABELS.filter(Boolean));
+    e.dash = pick(['solid', 'dotted']);
+    e.head = pick(['end', 'none', 'both']);
+    e.width = pick([1.5, 1.5, 1, 2.5, 4, 6]);
+    e.color = pick(LINE_COLORS);
+    e.fontSize = pick([12, 12, 10, 16]);
+    e.bold = rand() < 0.2;
+    e.italic = maybe(0.15, true);
+    e.route = pick(['elbow', 'elbow', 'straight']);
+    const anchor = () => rand() < 0.3 ? { side: pick(['n', 'e', 's', 'w']), t: rand() < 0.2 ? null : rand() } : null;
+    e.fromAnchor = anchor();
+    e.toAnchor = anchor();
+    if (rand() < 0.2) e.points = Array.from({ length: 1 + Math.floor(rand() * 4) }, () => ({ x: rand() * 1200, y: rand() * 900 }));
+    if (e.label && rand() < 0.2) e.labelAt = Math.round(rand() * 100) / 100;
+    if (rand() < 0.15) e.fromPort = pick(['rs1', 'a', 'out', 'D[7:0]']);
+    if (rand() < 0.15) e.toPort = pick(['b', 'in', 'clk']);
+    if (rand() < 0.1) e.length = pick([2, 3]);
+    if (rand() < 0.1 && e.head !== 'none') e.mark = pick(['circle', 'cross']);
+    d.edges.push(e);
+  }
+
+  // What a paste brings along and the editor keeps.
+  if (rand() < 0.3) d.title = pick(LABELS.filter((l) => l.trim() && !l.includes('\n')));
+  d.classDefs = rand() < 0.3 ? { ...CLASS_DEFS, default: 'fill:#fafafa' } : { ...CLASS_DEFS };
+  d.kept = { front: rand() < 0.2 ? ['config:', '  theme: forest'] : [], init: rand() < 0.2 ? ['%%{init: {"flowchart": {"curve": "basis"}}}%%'] : [],
+             comments: rand() < 0.3 ? ['%% a note from the paste'] : [], acc: rand() < 0.2 ? ['accTitle: Pipeline'] : [],
+             after: rand() < 0.2 ? ['click ' + d.nodes[0].id + ' "https://example.com"'] : [] };
+  return d;
+}
+
+// What the editor does on every commit, so the model under test is one the
+// editor could actually be holding.
+function asCommitted(d) {
+  const used = new Set(d.edges.flatMap((e) => [e.from, e.to]));
+  d.nodes = d.nodes.filter((n) => !isPoint(n) || used.has(n.id));
+  d.groups = d.groups.filter((g) => groupNodeIds(d, g).length);
+  fitGroups(d);
+  d.edges = d.edges.filter((e) => endOf(d, e.from) && endOf(d, e.to));
+  normalizeModel(d);
+  return d;
+}
+
+// A field that is unset, null, false or empty means the same as not there,
+// and so does a link `length` of 0 or 1 (a plain `-->`). A group's box is
+// derived from its blocks, so it isn't compared -- the picture comparison
+// below covers it.
+function canon(o, skip) {
+  const r = {};
+  for (const k of Object.keys(o).sort()) {
+    const v = o[k];
+    if (v == null || v === false || (Array.isArray(v) && !v.length) || (skip || []).includes(k)) continue;
+    if (k === 'length' && v < 2) continue;
+    r[k] = v && typeof v === 'object' && !Array.isArray(v) ? canon(v) : Array.isArray(v) ? v.map((x) => x && typeof x === 'object' ? canon(x) : x) : v;
+  }
+  return JSON.stringify(r);
+}
+
+function modelDiff(a, b) {
+  const an = a.nodes.map((n) => canon(n));
+  const bn = b.nodes.map((n) => canon(n));
+  for (let i = 0; i < Math.max(an.length, bn.length); i++) {
+    if (an[i] !== bn[i]) return 'node ' + i + ':\n' + an[i] + '\n' + bn[i];
+  }
+  // Connectors come back grouped by the block they leave, not in the order
+  // they were drawn in, so they are compared as a set.
+  const ae = a.edges.map((e) => canon(e)).sort();
+  const be = b.edges.map((e) => canon(e)).sort();
+  for (let i = 0; i < Math.max(ae.length, be.length); i++) {
+    if (ae[i] !== be[i]) return 'edge:\n' + ae[i] + '\n' + be[i];
+  }
+  const groupKey = (g) => canon(Object.assign({}, g, { members: g.members.slice().sort() }), ['x', 'y', 'w', 'h']);
+  const ag = a.groups.map(groupKey).sort().join('\n');
+  const bg = b.groups.map(groupKey).sort().join('\n');
+  if (ag !== bg) return 'groups:\n' + ag + '\n--\n' + bg;
+  // A classDef no block or group uses isn't written: nothing shows it.
+  const inUse = (d) => new Set(['default'].concat(...d.nodes.concat(d.groups).map((x) => x.classes || [])));
+  const rest = (d) => canon(Object.assign({}, d, { classDefs: Object.fromEntries(Object.entries(d.classDefs || {}).filter(([c]) => inUse(d).has(c))) }),
+    ['nodes', 'edges', 'groups', 'direction']);
+  return rest(a) === rest(b) ? null : 'diagram:\n' + rest(a) + '\n' + rest(b);
+}
+
+// The picture itself. Connector and group layers are compared as sets, for
+// the same reason as above.
+function picture(d) {
+  const svg = buildExportSvg(d).svg;
+  for (const layer of svg.querySelectorAll('[data-layer=edges], [data-layer=groups], [data-layer=pins]')) {
+    const kids = [...layer.children].map((k) => { k.removeAttribute('data-index'); return k.outerHTML; }).sort();
+    layer.innerHTML = kids.join('');
+  }
+  return svg.outerHTML;
+}
+
+// Which connectors were drawn differently, matched up by what they are.
+function routeDifference(a, b) {
+  const routes = (d) => {
+    const geom = edgeGeometry(d);
+    const seen = {};
+    return Object.fromEntries(d.edges.map((e, i) => {
+      const k = canon(e);
+      seen[k] = (seen[k] || 0) + 1;
+      return [e.from + '>' + e.to + ' #' + seen[k] + ' ' + k, JSON.stringify(geom[i])];
+    }));
+  };
+  const ra = routes(a);
+  const rb = routes(b);
+  return Object.keys(ra).filter((k) => ra[k] !== rb[k]).map((k) => k + '\n    ' + ra[k] + '\n    ' + rb[k]).join('\n') || 'routes equal';
+}
+
+const RUNS = 1000;
+const fuzzed = [];
+for (let i = 0; i < RUNS; i++) {
+  const d = asCommitted(genModel());
+  const alt = toAltText(d);
+  let back;
+  try { back = parseMermaid(alt); } catch (e) { check(false, 'fuzz ' + i + ' parse threw: ' + e.message, alt); continue; }
+  const diff = modelDiff(d, back);
+  const ok = check(toAltText(back) === alt, 'fuzz ' + i + ' text not idempotent', alt + '\n--\n' + toAltText(back)) &&
+    check(!diff, 'fuzz ' + i + ' model changed', diff + '\n' + alt) &&
+    check(picture(d) === picture(back), 'fuzz ' + i + ' picture changed', routeDifference(d, back) + '\n' + alt);
+  // Word may hand the alt text back with Windows or old-Mac line endings.
+  check(toAltText(parseMermaid(alt.replace(/\n/g, '\r\n'))) === alt, 'fuzz ' + i + ' CRLF');
+  check(toAltText(parseMermaid(alt.replace(/\n/g, '\r'))) === alt, 'fuzz ' + i + ' CR');
+  if (ok) fuzzed.push(d);
+}
+out.textContent += 'fuzz: ' + fuzzed.length + ' / ' + RUNS + ' diagrams round-tripped exactly\n';
+
+// --- 2. real Mermaid --------------------------------------------------------
+
+const squash = (s) => String(s).replace(/\s+/g, '');
+
+async function againstMermaid(d, what) {
+  const text = toMermaid(d);
+  try { await mermaid.parse(text); }
+  catch (e) { check(false, what + ': Mermaid rejects it: ' + String(e.message || e).split('\n')[0], text); return; }
+  // Mermaid names its elements `<render id>-flowchart-<node id>-<n>` and
+  // `<render id>-<subgraph id>`.
+  const rid = 'm' + Math.floor(rand() * 1e9);
+  let svg;
+  try { svg = (await mermaid.render(rid, text)).svg; }
+  catch (e) { check(false, what + ': Mermaid render failed: ' + (e.message || e), text); return; }
+  // As HTML: Mermaid's labels hold unclosed <br>s, which XML parsing chokes on.
+  const doc = new DOMParser().parseFromString(svg, 'text/html');
+  const nodes = [...doc.querySelectorAll('g.node, g.icon-shape, g.image-shape')];
+  check(nodes.length === d.nodes.length, what + ': Mermaid drew ' + nodes.length + ' blocks, want ' + d.nodes.length, text);
+  for (const n of d.nodes) {
+    const g = nodes.find((x) => x.id.replace(rid + '-flowchart-', '').replace(/-\d+$/, '') === n.id);
+    if (!check(g, what + ': Mermaid has no block ' + n.id, text)) continue;
+    // Contained, not equal: Mermaid draws a console with a ">_" prompt in
+    // front. It draws an hourglass (collate) and the wiring symbols with no
+    // label at all -- theirs is kept in the text for an LLM to read.
+    if (n.shape === 'collate' || LABELLESS.has(n.shape)) continue;
+    check(squash(g.textContent).includes(squash(n.label)),
+      what + ': block ' + n.id + ' reads "' + g.textContent + '" in Mermaid, ' + JSON.stringify(n.label) + ' here', text);
+  }
+  // Every connector label must show. Self-loops aside: with two on one block,
+  // Mermaid itself draws only one of their labels.
+  const edgeText = [...doc.querySelectorAll('g.edgeLabel')].map((x) => squash(x.textContent)).filter(Boolean);
+  const missing = d.edges.filter((e) => e.label.trim() && e.from !== e.to).map((e) => squash(e.label))
+    .filter((l) => { const k = edgeText.indexOf(l); if (k !== -1) edgeText.splice(k, 1); return k === -1; });
+  check(!missing.length, what + ': connector labels missing in Mermaid: ' + missing.join(' / '), text);
+  const clusters = [...doc.querySelectorAll('g.cluster')];
+  check(clusters.length === d.groups.length, what + ': Mermaid drew ' + clusters.length + ' groups, want ' + d.groups.length, text);
+  for (const g of d.groups) {
+    const c = clusters.find((x) => x.id === rid + '-' + g.id);
+    // A cluster's text includes its subgroups' titles; its own comes first.
+    if (check(c, what + ': Mermaid has no group ' + g.id, text)) {
+      const title = c.querySelector('.cluster-label');
+      check(squash(title ? title.textContent : '') === squash(g.label), what + ': group ' + g.id + ' reads "' + (title && title.textContent) + '"', text);
+    }
+  }
+}
+
+(async () => {
+  mermaid.initialize({ startOnLoad: false });
+  const every = asCommitted(newDiagram());
+  SHAPE_NAMES.forEach((shape, i) => {
+    every.nodes.push({ id: makeId(shape, new Set()), label: LABELLESS.has(shape) ? '' : shape, shape,
+                       x: (i % 8) * 200, y: Math.floor(i / 8) * 120, w: defaultSize(shape)[0], h: defaultSize(shape)[1],
+                       fill: '#ffffff', fontSize: 13, bold: false,
+                       icon: shape === 'icon' ? 'fa:user' : undefined, img: shape === 'image' ? '../icon-64.png' : undefined });
+  });
+  await againstMermaid(every, 'every shape');
+  // Mermaid takes a while per diagram: the first 100 fuzzed ones.
+  const sample = fuzzed.slice(0, 100);
+  for (let i = 0; i < sample.length; i++) await againstMermaid(sample[i], 'mermaid ' + i);
+  out.textContent += 'mermaid: ' + (sample.length + 1) + ' diagrams checked against Mermaid 11.17.2\n';
+  out.textContent += failed ? failed + ' FAILED, ' + passed + ' passed\n' : 'ALL PASS (' + passed + ' checks)\n';
+  document.title = failed ? 'FAIL' : 'PASS';
+})();
+</script>

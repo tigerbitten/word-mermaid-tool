@@ -224,7 +224,9 @@ function makeId(label, taken) {
   // ASCII only: Mermaid trips over some non-ASCII ids (`Q漢end`). A pasted
   // unicode id is kept as written; only made-up ones are plain.
   let base = String(label || '').normalize('NFD').replace(/[^A-Za-z0-9_]/g, '');
-  if (!base || /^[0-9]/.test(base) || RESERVED_IDS.has(base.toLowerCase())) base = 'n' + base;
+  // Mermaid's layout keeps nodes in plain objects, so a block named after an
+  // Object property (`constructor`, `__proto__`) crashes it outright.
+  if (!base || /^[0-9]/.test(base) || RESERVED_IDS.has(base.toLowerCase()) || base in Object.prototype) base = 'n' + base;
   base = base.slice(0, 24);
   let id = base;
   let i = 2;
@@ -330,8 +332,12 @@ function readLook(decl) {
 
 // Inside `@{ ... }` a label is a YAML string, where a backslash escapes: it
 // is written as Mermaid's entity code instead. Empty is a blank, as above.
+// Mermaid also reads it as Markdown, unlike a bracketed label: "a*b*c" or
+// "_x_" would lose their stars and underscores. An underscore between two
+// letters can't be emphasis, so `clk_en_n` stays as typed.
 function yamlLabel(label) {
-  return quoteLabel(label || ' ').replace(/\\/g, '#92;');
+  return quoteLabel(label || ' ').replace(/\\/g, '#92;').replace(/\*/g, '#42;')
+    .replace(/_(?![A-Za-z0-9])|(?<![A-Za-z0-9])_/g, '#95;');
 }
 
 function nodeDecl(n) {
@@ -388,7 +394,7 @@ function edgeDecl(e) {
 // back. A stray character typed into one would break the whole text; then
 // it's left out, and the blocks' own style lines carry its look.
 function classDefOf(d, c) {
-  const decl = (d.classDefs || {})[c];
+  const decl = d.classDefs && Object.hasOwn(d.classDefs, c) ? d.classDefs[c] : null;
   return decl && /^[\w\s:#%(),.\-!;\/]*$/.test(decl) ? decl : null;
 }
 
@@ -426,6 +432,34 @@ function linkStyleDecl(e, i) {
   if (e.bold) parts.push('font-weight:bold');
   if (e.italic) parts.push('font-style:italic');
   return parts.length ? 'linkStyle ' + i + ' ' + parts.join(',') : null;
+}
+
+// Rounds the model to exactly what toMermaid writes: whole pixels, and an
+// attachment point to three places. A text label's fill and border colour
+// aren't written -- nothing draws them -- so they're cleared: otherwise
+// changing its shape would bring them back before a save but not after. A
+// label of only spaces reads back as empty, so it is empty now. The
+// direction becomes the one the drawing shows, which is what gets written, so
+// a self-loop is drawn now the way it will be when reopened. The editor runs
+// this on every change, so the diagram on screen is the one that comes back
+// out of Word.
+function normalizeModel(d) {
+  for (const n of d.nodes) {
+    for (const k of ['x', 'y', 'w', 'h']) n[k] = Math.round(n[k]);
+    if (n.shape === 'text') { n.fill = '#ffffff'; delete n.stroke; }
+  }
+  for (const g of d.groups) if (g.fontSize === GROUP_FONT_SIZE) delete g.fontSize;
+  for (const e of d.edges) {
+    e.points = e.points && e.points.length ? e.points.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })) : null;
+    for (const a of [e.fromAnchor, e.toAnchor]) if (a && a.t != null) a.t = +a.t.toFixed(3);
+  }
+  for (const x of [].concat(d.nodes, d.edges, d.groups)) if (!String(x.label || '').trim()) x.label = '';
+  // Where text was slid to along its connector means nothing once it has none.
+  for (const e of d.edges) if (!e.label) e.labelAt = null;
+  // Last: a connector to a group reads the group's box, which the rounding
+  // above may have moved.
+  fitGroups(d);
+  d.direction = flowDirection(d);
 }
 
 // A turned shape (a mux pointing right) adds its angle: Mermaid can't say it.
@@ -600,8 +634,12 @@ function toMermaid(d) {
   for (const g of order.filter((it) => it.members)) {
     const base = readLook((g.classes || []).map((c) => classDefOf(d, c)).reverse().filter(Boolean).join(','));
     const parts = [];
-    if (g.fill && g.fill !== base.fill) parts.push('fill:' + g.fill);
-    if (g.stroke && g.stroke !== base.stroke) parts.push('stroke:' + g.stroke);
+    // Unset but given by a class: the canvas's own colour is written out, or
+    // the class would win where the canvas shows the default (as for blocks).
+    const fill = g.fill || (base.fill ? GROUP_FILL : null);
+    const stroke = g.stroke || (base.stroke ? GROUP_STROKE : null);
+    if (fill && fill !== base.fill) parts.push('fill:' + fill);
+    if (stroke && stroke !== base.stroke) parts.push('stroke:' + stroke);
     if (g.strokeWidth && g.strokeWidth !== base.strokeWidth) parts.push('stroke-width:' + g.strokeWidth + 'px');
     if (g.dash && !base.dash) parts.push('stroke-dasharray:5 4');
     if (g.color && g.color !== base.color) parts.push('color:' + g.color);
@@ -676,9 +714,7 @@ function stripFence(raw) {
 // whatever indentation it felt like using.
 
 // Longest opener first. `[/` and `[\` each have two possible closers (a
-// parallelogram and a trapezoid), so the pair that shares an opener is listed
-// with the more common one first and the reader falls through when its closer
-// isn't there.
+// parallelogram and a trapezoid); readNodeRef takes whichever comes first.
 const BRACKETS = [
   ['(((', ')))', 'doublecircle'],
   ['[[', ']]', 'subroutine'],
@@ -783,15 +819,21 @@ function readNodeRef(s, i) {
              label: props.label != null ? (unquoteLabel(props.label) === ' ' ? '' : unquoteLabel(props.label)) : null, next: end.next, cls: end.cls }, media);
   }
 
-  for (const [open, close, shape] of BRACKETS) {
+  for (const [open] of BRACKETS) {
     if (!s.startsWith(open, i)) continue;
     let from = i + open.length;
     while (from < s.length && s[from] === ' ') from++;
     if (s[from] === '"') from = skipQuoted(s, from);
-    const end = s.indexOf(close, from);
-    if (end === -1) continue;
-    const md = markdownLabel(s.slice(i + open.length, end));
-    return Object.assign({ id, shape, label: md.label === ' ' ? '' : md.label, bold: md.bold }, readClass(s, end + close.length));
+    // Of the closers this opener can have, the nearest ends the label --
+    // otherwise `G[/a\] --> H[\b/]` reads as one block running to H's `/]`.
+    let best = null;
+    for (const [o, close, shape] of BRACKETS) {
+      const end = o === open ? s.indexOf(close, from) : -1;
+      if (end !== -1 && (!best || end < best.end)) best = { end, close, shape };
+    }
+    if (!best) continue;
+    const md = markdownLabel(s.slice(i + open.length, best.end));
+    return Object.assign({ id, shape: best.shape, label: md.label === ' ' ? '' : md.label, bold: md.bold }, readClass(s, best.end + best.close.length));
   }
   return Object.assign({ id, shape: null, label: null }, readClass(s, i));
 }
@@ -1143,7 +1185,9 @@ function parseMermaid(text) {
     return d;
   }
   const d = newDiagram();
-  const layout = {};
+  // Keyed by id without a prototype, so a block called `constructor` or
+  // `__proto__` is just a key (a diagram saved by an older build may have one).
+  const layout = Object.create(null);
   const layoutOrder = [];   // the ids of the layout lines, in order: stacking order
   const anchors = {};
   const paths = {};
@@ -1152,9 +1196,9 @@ function parseMermaid(text) {
   const ports = {};
   let linkNo = 0;
   const linkStyles = {};
-  const styles = {};
-  const classDefs = {};   // classDef name -> its style declaration
-  const classOf = {};     // node id -> class names, in the order given
+  const styles = Object.create(null);
+  const classDefs = Object.create(null);   // classDef name -> its style declaration
+  const classOf = Object.create(null);     // node id -> class names, in the order given
   const edgeIds = new Set();
   const oldJunctions = new Set();
   const kept = { front: [], init: [], comments: [], acc: [], after: [] };
@@ -1333,9 +1377,15 @@ function parseMermaid(text) {
 
     // Anything left is a node declaration or a chain of edges, where either
     // side of a link may be an `A & B` list: every pairing becomes an edge.
+    // Before the header nothing is a block: it's another diagram type, refused
+    // below by name, or a line of prose.
+    if (!sawHeader) continue;
+    // Whatever it can't read is an error quoting the statement: dropping the
+    // rest of a line quietly would lose blocks and connectors without a word.
     const s = line;
+    const unread = (rest) => new Error('could not read "' + rest.trim() + '" in "' + line + '"');
     const head = readNodeList(s, 0);
-    if (!head) continue;
+    if (!head) throw unread(s);
     let prev = head.refs.map(ensureNode);
     let i = head.next;
     while (i < s.length) {
@@ -1345,7 +1395,7 @@ function parseMermaid(text) {
       if (edgeId) edgeIds.add(edgeId[1]);
       i = link.next;
       const next = readNodeList(s, i);
-      if (!next) break;
+      if (!next) throw unread(s.slice(i));
       i = next.next;
       const targets = next.refs.map(ensureNode);
       if (link.token.startsWith('~')) {
@@ -1364,6 +1414,7 @@ function parseMermaid(text) {
       }
       prev = targets;
     }
+    if (s.slice(i).trim()) throw unread(s.slice(i));
   }
 
   // The reader is lenient about everything else, which means without this any
@@ -1382,14 +1433,18 @@ function parseMermaid(text) {
     const decl = [styles[n.id]].concat((classOf[n.id] || []).map((c) => classDefs[c]).reverse(), classDefs.default)
       .filter(Boolean).join(',');
     const look = readLook(decl);
+    // `stroke:#333`, `stroke-width:1.5px` and `color:#111111` are how the
+    // writer spells the canvas's own border and text colour (to darken
+    // Mermaid's lilac border, or to beat a class); read back, they are that
+    // default again, which writes the same.
     if (look.fill === 'none' && look.stroke === 'none') n.shape = 'text';
     else {
       if (look.fill && look.fill !== 'none') n.fill = look.fill;
-      if (look.stroke && look.stroke !== 'none') n.stroke = look.stroke;
+      if (look.stroke && look.stroke !== 'none' && look.stroke !== '#333') n.stroke = look.stroke;
     }
-    if (look.strokeWidth) n.strokeWidth = look.strokeWidth;
+    if (look.strokeWidth && look.strokeWidth !== 1.5) n.strokeWidth = look.strokeWidth;
     if (look.dash) n.dash = true;
-    if (look.color) n.color = look.color;
+    if (look.color && look.color !== '#111111') n.color = look.color;
     if (look.fontSize) n.fontSize = look.fontSize;
     if (look.bold) n.bold = true;
     if (look.italic) n.italic = true;
@@ -1431,8 +1486,9 @@ function parseMermaid(text) {
     if (look.strokeWidth) g.strokeWidth = look.strokeWidth;
     if (look.dash) g.dash = true;
     if (look.fontSize) g.fontSize = look.fontSize;
-    if (look.fill && look.fill !== 'none') g.fill = look.fill;
-    if (look.stroke && look.stroke !== 'none') g.stroke = look.stroke;
+    // The canvas's own colours, written to beat a class, read back as unset.
+    if (look.fill && look.fill !== 'none' && look.fill !== GROUP_FILL) g.fill = look.fill;
+    if (look.stroke && look.stroke !== 'none' && look.stroke !== GROUP_STROKE) g.stroke = look.stroke;
     if (look.color) g.color = look.color;
   }
   d.classDefs = classDefs;
@@ -1709,6 +1765,8 @@ function groupTabWidthEstimate(g) {
 const GROUP_PAD = 18;
 const GROUP_TITLE_H = 22;
 const GROUP_FONT_SIZE = 12;
+const GROUP_FILL = '#f4f6fb';
+const GROUP_STROKE = '#6b7fb3';
 
 // The title tab grows with the title's text size, and the box with it.
 function groupTitleH(g) {

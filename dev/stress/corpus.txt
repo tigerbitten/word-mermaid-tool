@@ -1789,3 +1789,6 @@ stateDiagram-v2
         Configure --> Verify
     }
     Setup --> Running
+@@@ 513-repro-slanted-shape-chain
+flowchart LR
+    F[\alt\] --> G[/trap\] --> H[\trapalt/] --> I[/para/]

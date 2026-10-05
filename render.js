@@ -38,7 +38,7 @@ const SVG_STYLE = `
                    text-anchor: middle; dominant-baseline: middle; }
   .wm-edge-label-bg { fill: #ffffff; stroke: none; }
   .wm-port { font-family: ${FONT_STACK}; font-size: 10px; fill: #444444; dominant-baseline: middle; }
-  .wm-group { fill: #f4f6fb; stroke: #6b7fb3; stroke-width: 1.5; stroke-dasharray: 8 4; }
+  .wm-group { fill: ${GROUP_FILL}; stroke: ${GROUP_STROKE}; stroke-width: 1.5; stroke-dasharray: 8 4; }
   .wm-group-tab { fill: #6b7fb3; stroke: none; }
   .wm-group-title { font-family: ${FONT_STACK}; font-size: 12px; fill: #ffffff;
                     text-anchor: start; dominant-baseline: middle; font-weight: bold; }
@@ -1125,7 +1125,7 @@ function routeAll(d) {
     }
     return {
       a, b,
-      from: { side: fromSide, t: fa.t, other: b, pinned: fa.t != null },
+      from: { side: fromSide, t: fa.t, other: b, pinned: fa.t != null, out: true },
       to: { side: toSide, t: ta.t, other: a, pinned: ta.t != null },
     };
   });
@@ -1146,13 +1146,20 @@ function routeAll(d) {
   for (const { free, pinned } of buckets.values()) {
     if (!free.length) continue;
     // Order the fan by where the other end actually sits, so connectors don't
-    // cross each other on the way out.
+    // cross each other on the way out. Ties -- blocks in a column, a label
+    // centred on a block, two lines to the same block -- are settled by the
+    // other axis, the other end and then direction, never by list position
+    // (see claimOrder).
     const axis = free[0].side === 'n' || free[0].side === 's' ? 'x' : 'y';
-    free.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis]);
+    const cross = axis === 'x' ? 'y' : 'x';
+    free.sort((p, q) => centerOf(p.other)[axis] - centerOf(q.other)[axis] ||
+      centerOf(p.other)[cross] - centerOf(q.other)[cross] ||
+      (p.other.id < q.other.id ? -1 : p.other.id > q.other.id ? 1 : 0) || !!q.out - !!p.out);
     // Evenly spaced spots for every end on the side; each pinned end claims
     // the spot nearest it, and the automatic ones take the rest in order.
     const n = free.length + pinned.length;
     const spots = Array.from({ length: n }, (_, i) => (i + 1) / (n + 1));
+    pinned.sort((p, q) => p.t - q.t);
     for (const p of pinned) {
       let k = 0;
       spots.forEach((t, i) => { if (Math.abs(t - p.t) < Math.abs(spots[k] - p.t)) k = i; });
@@ -1207,7 +1214,8 @@ function routeAll(d) {
     }
   }
 
-  return slots.map((s, i) => {
+  const routes = slots.map(() => null);
+  for (const i of claimOrder(d)) routes[i] = ((s) => {
     if (!s) return null;
     if (s.self) return { self: true, raw: selfLoopPoints(s.a, d.direction) };
     if (s.straight) {
@@ -1232,7 +1240,18 @@ function routeAll(d) {
       to: { side: s.to.side, t: s.to.t },
       a0, b0,
     };
-  });
+  })(slots[i]);
+  return routes;
+}
+
+// The order connectors claim lanes and label spots in: by their ends, not by
+// list position. Saving lists connectors by the block they leave, so going
+// through Word reorders them; claiming in list order would re-route lines and
+// move their text when a diagram is reopened. Connectors between the same two
+// ends keep their order, which saving keeps too.
+function claimOrder(d) {
+  const key = (i) => d.edges[i].from + '\u0000' + d.edges[i].to;
+  return d.edges.map((e, i) => i).sort((i, j) => (key(i) < key(j) ? -1 : key(i) > key(j) ? 1 : 0));
 }
 
 // What actually gets drawn: the routes with redundant points removed.
@@ -1352,7 +1371,9 @@ function labelBoxes(d, geom) {
 function placeLabels(d, geom) {
   const blocks = d.nodes.filter((n) => !isPoint(n) && n.w && n.h);
   const placed = [];
-  return d.edges.map((e, i) => {
+  // In claimOrder, like the routes: each label keeps off those placed before it.
+  const boxes = d.edges.map(() => null);
+  for (const i of claimOrder(d)) boxes[i] = ((e) => {
     const pts = geom[i];
     if (!e.label || !pts || pts.length < 2) return null;
     let best;
@@ -1409,7 +1430,8 @@ function placeLabels(d, geom) {
     }
     placed.push(best);
     return best;
-  });
+  })(d.edges[i]);
+  return boxes;
 }
 
 function drawEdge(parent, e, pts, index, box, pinLayer) {

@@ -78,6 +78,12 @@ d = parseMermaid('flowchart LR\n  A@{\n    shape: cyl\n    label: "X"\n  }\n  B[
 check('multi-line @{ } and label read in full', d.nodes[0].shape === 'cylinder' && d.nodes[0].label === 'X' && d.nodes[1].label === 'two\nlines', d.nodes);
 d = parseMermaid('flowchart TB\n  subgraph S\n    Start --> End\n    Mid\n  end');
 check('a block called End does not close the subgraph', d.groups[0].members.join() === 'Start,End,Mid', d.groups);
+d = parseMermaid('flowchart LR\n  F[\\alt\\] --> G[/trap\\] --> H[\\trapalt/]');
+check('a slanted shape ends at its nearest closer', d.nodes.map((n) => n.shape).join() === 'parallelogram_alt,trapezoid,trapezoid_alt' &&
+  edges(d) === 'F>G G>H', [d.nodes.map((n) => n.shape), edges(d)]);
+let unreadable = '';
+try { parseMermaid('flowchart LR\n  A --> B\n  A -->> B'); } catch (e) { unreadable = e.message; }
+check("what can't be read is an error, not a dropped connector", /could not read "> B"/.test(unreadable), unreadable);
 d = parseMermaid('flowchart LR\n  A --> B\n  subgraph S\n    B\n  end\n  subgraph T\n    C --> B\n  end');
 check('a block mentioned in a subgraph joins it, the first one only', d.groups[0].members.join() === 'B' && d.groups[1].members.join() === 'C', d.groups);
 d = parseMermaid('flowchart LR\n  A["I #9829; it #amp; you"] --> B["`*draft* **only**`"]\n  subgraph S["`**Backend**`"]\n    C\n  end');

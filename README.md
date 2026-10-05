@@ -237,6 +237,7 @@ real Word.
 | `test.js` | `node test.js`: Mermaid in and out without a browser (what LLMs write, round trips, pasted-diagram layout, label escaping) |
 | `dev/stress/` | The tool against real Mermaid 11.17.2 on ~190 LLM-style diagrams (`node run.js`; setup in `CLAUDE.md`) |
 | `dev/visual/` | Picture-quality checks over the same diagrams (`node check.js`) |
+| `dev/roundtrip.html` | The round-trip proof: 1000 random diagrams holding everything the editor can hold go through the alt text and must come back byte-identical, field for field, as the same picture; a sample is checked in real Mermaid 11.17.2. Open it in a browser — no install; the last line says ALL PASS |
 
 ### Every time you push
 
